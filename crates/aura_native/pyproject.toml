@@ -1,0 +1,27 @@
+# Build manifest for the optional `aura_native` acceleration extension.
+#
+# This builds a standalone importable module named `aura_native` that the main
+# connector's `aura._native` adapter loads opportunistically. The connector
+# itself installs and runs in pure Python without this extension; see
+# ../../docs/NATIVE_ACCELERATION.md.
+#
+# Build into the active environment with:
+#     maturin develop --manifest-path crates/aura_native/Cargo.toml --release
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "aura-native"
+version = "0.1.0"
+description = "Optional native acceleration extension for the Aura connector."
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[tool.maturin]
+manifest-path = "Cargo.toml"
+module-name = "aura_native"

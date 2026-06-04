@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.tox/
+.nox/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Build and packaging
+build/
+dist/
+wheelhouse/
+site/
+*.whl
+*.tar.gz
+
+# Rust
+target/
+crates/*/target/
+
+# Maturin
+.maturin/
+*.profraw
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets and local config
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Logs
+*.log
+logs/
+
+# Local release artifacts
+.local/
+release/
+
+# Keep the native crate lockfile tracked for reproducible builds.
+!crates/aura_native/Cargo.lock

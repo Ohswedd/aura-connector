@@ -1,0 +1,66 @@
+name: Native
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Native acceleration (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/aura_native/target
+          key: cargo-${{ matrix.os }}-${{ hashFiles('crates/aura_native/Cargo.lock') }}
+
+      - name: Install connector and tooling
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[dev,native]"
+          python -m pip install maturin
+
+      - name: Build native extension
+        run: maturin build --manifest-path crates/aura_native/Cargo.toml --release
+
+      - name: Install native wheel
+        shell: bash
+        run: python -m pip install crates/aura_native/target/wheels/*.whl
+
+      - name: Run native tests
+        run: python -m pytest tests/unit/test_native_adapter.py tests/native/test_native_parity.py -vv
+
+      - name: Native benchmark
+        run: python benchmarks/bench_native_acceleration.py
+
+      - name: Doctor
+        run: aura doctor

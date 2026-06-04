@@ -1,0 +1,137 @@
+"""Aura — async-native, type-safe Python client and connector for AuraDB.
+
+Public API surface. Internal modules (protocol, transport internals, hydration) are
+available but the names exported here are the stable, user-facing entry points.
+"""
+
+from __future__ import annotations
+
+from ._native import native_status
+from .client import Aura, Client, Transaction, connect
+from .config import (
+    ClientConfig,
+    PasswordAuth,
+    PoolConfig,
+    RetryPolicy,
+    TLSConfig,
+    TokenAuth,
+    parse_dsn,
+)
+from .errors import (
+    AuraAuthenticationError,
+    AuraAuthorizationError,
+    AuraClientClosedError,
+    AuraConnectionError,
+    AuraConstraintError,
+    AuraConstraintViolation,
+    AuraError,
+    AuraMigrationError,
+    AuraNonRetryableTransactionError,
+    AuraNotFoundError,
+    AuraProtocolError,
+    AuraProtocolVersionError,
+    AuraQueryError,
+    AuraRetryableTransactionError,
+    AuraSchemaError,
+    AuraSerializationError,
+    AuraServerError,
+    AuraTimeoutError,
+    AuraTransactionError,
+    AuraValidationError,
+    RelationshipNotLoadedError,
+)
+from .fields import Field, FieldInfo
+from .models import AuraModel, get_model, registered_models
+from .observability import LatencyHistogram, Metrics, TelemetryConfig, query_fingerprint
+from .query import (
+    FieldReference,
+    QueryBuilder,
+    and_,
+    not_,
+    or_,
+)
+from .schema import (
+    Change,
+    LockImpactEstimate,
+    MigrationPlan,
+    ModelSchema,
+    diff_schemas,
+    generate_migration,
+    schema_document,
+    schema_json,
+)
+from .vectors import Vector
+
+#: ``Model`` is a friendly alias for :class:`AuraModel`.
+Model = AuraModel
+
+__all__ = [
+    # client
+    "Aura",
+    "Client",
+    "Transaction",
+    "connect",
+    # models / fields / vectors
+    "AuraModel",
+    "Model",
+    "Field",
+    "FieldInfo",
+    "Vector",
+    "get_model",
+    "registered_models",
+    # query
+    "QueryBuilder",
+    "FieldReference",
+    "and_",
+    "or_",
+    "not_",
+    # schema
+    "ModelSchema",
+    "schema_document",
+    "schema_json",
+    # migrations
+    "Change",
+    "LockImpactEstimate",
+    "MigrationPlan",
+    "diff_schemas",
+    "generate_migration",
+    # observability
+    "Metrics",
+    "LatencyHistogram",
+    "TelemetryConfig",
+    "query_fingerprint",
+    # native acceleration diagnostics (optional in-repo extra)
+    "native_status",
+    # config
+    "ClientConfig",
+    "parse_dsn",
+    "TokenAuth",
+    "PasswordAuth",
+    "TLSConfig",
+    "RetryPolicy",
+    "PoolConfig",
+    # errors
+    "AuraError",
+    "AuraConnectionError",
+    "AuraClientClosedError",
+    "AuraTimeoutError",
+    "AuraProtocolError",
+    "AuraProtocolVersionError",
+    "AuraQueryError",
+    "AuraValidationError",
+    "AuraSchemaError",
+    "AuraMigrationError",
+    "AuraAuthenticationError",
+    "AuraAuthorizationError",
+    "AuraServerError",
+    "AuraNotFoundError",
+    "AuraConstraintError",
+    "AuraConstraintViolation",
+    "AuraSerializationError",
+    "AuraTransactionError",
+    "AuraRetryableTransactionError",
+    "AuraNonRetryableTransactionError",
+    "RelationshipNotLoadedError",
+]
+
+__version__ = "0.1.0"

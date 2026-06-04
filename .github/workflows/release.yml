@@ -1,0 +1,91 @@
+name: Release readiness
+
+# Manual workflow for maintainers to verify that the current ref is ready to
+# release. It runs the full gate and builds artifacts, but never publishes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to verify"
+        required: false
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Full gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[dev]"
+          python -m pip install twine
+
+      - name: Ruff lint
+        run: python -m ruff check .
+
+      - name: Ruff format check
+        run: python -m ruff format --check .
+
+      - name: Mypy
+        run: python -m mypy src
+
+      - name: Pytest
+        run: python -m pytest -vv
+
+      - name: Build
+        run: python -m build
+
+      - name: Check package metadata
+        run: python -m twine check dist/*
+
+  native-gate:
+    name: Native gate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[dev,native]"
+          python -m pip install maturin
+
+      - name: Build native extension
+        run: maturin build --manifest-path crates/aura_native/Cargo.toml --release
+
+      - name: Install native wheel
+        shell: bash
+        run: python -m pip install crates/aura_native/target/wheels/*.whl
+
+      - name: Run native tests
+        run: python -m pytest tests/unit/test_native_adapter.py tests/native/test_native_parity.py -vv

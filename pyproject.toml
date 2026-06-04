@@ -1,0 +1,108 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aura-connector"
+version = "0.1.0"
+description = "Async-native, type-safe Python client and connector for AuraDB."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Aura Maintainers" }]
+keywords = ["database", "async", "client", "vector", "orm", "connector", "auradb"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "build>=1.2",
+]
+# Optional native acceleration. Installs the maturin build tool used to compile
+# the in-repository `aura_native` extension (crates/aura_native). The connector
+# itself never requires Rust: the pure-Python fallback in aura._native is always
+# present. After installing this extra, build the extension into the environment:
+#     maturin develop --manifest-path crates/aura_native/Cargo.toml --release
+# See docs/NATIVE_ACCELERATION.md for the full workflow and packaging notes.
+native = [
+    "maturin>=1.5,<2.0",
+]
+
+[project.scripts]
+aura = "aura.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Ohswedd/aura-connector"
+Documentation = "https://github.com/Ohswedd/aura-connector/tree/main/docs"
+Source = "https://github.com/Ohswedd/aura-connector"
+Issues = "https://github.com/Ohswedd/aura-connector/issues"
+Changelog = "https://github.com/Ohswedd/aura-connector/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aura"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/aura", "README.md", "LICENSE", "CHANGELOG.md", "docs", "examples", "crates"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"
+filterwarnings = ["error"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests", "examples", "benchmarks"]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+    "B008",   # function call in default argument — used intentionally for Field()
+    "RUF012", # mutable class attrs: model fields are managed by the metaclass
+    "RUF022", # __all__ is grouped by concern, not alphabetized, on purpose
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011"]
+"benchmarks/**" = ["T201"]
+"examples/**" = ["T201"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["aura"]
+mypy_path = "src"
+strict = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = "aura.*"
+disallow_any_explicit = false
+
+# The optional native extension `aura_native` is a compiled module without type
+# stubs. Whether or not it is installed, mypy must not error on importing it (the
+# adapter falls back to pure Python at runtime). This keeps `mypy src` identical with
+# and without the native extra built.
+[[tool.mypy.overrides]]
+module = "aura_native"
+ignore_missing_imports = true
