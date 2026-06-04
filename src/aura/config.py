@@ -29,7 +29,11 @@ __all__ = [
 
 DEFAULT_PORT = 7171
 DEFAULT_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024  # 64 MiB hard ceiling on a single frame
-_VALID_SCHEMES = frozenset({"aura", "auras", "aura+tcp", "aura+memory"})
+#: DSN schemes parsed into a full :class:`ClientConfig` here. These are the schemes that
+#: route to a protocol backend (AuraDB over a transport, or the in-process reference
+#: engine). Database-adapter schemes (``sqlite``/``postgres``/…) are parsed by the backend
+#: registry, which builds a lightweight config and the matching adapter.
+_VALID_SCHEMES = frozenset({"aura", "auras", "aura+tcp", "aura+memory", "memory"})
 
 
 class _Redacted:
@@ -171,7 +175,7 @@ class ClientConfig:
     @property
     def is_memory(self) -> bool:
         """Whether this DSN selects the in-memory reference transport."""
-        return self.scheme == "aura+memory"
+        return self.scheme in {"aura+memory", "memory"}
 
     @property
     def address(self) -> str:

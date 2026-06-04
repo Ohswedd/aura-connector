@@ -8,48 +8,28 @@ network IO at import time or in ``__init__`` — only ``connect``/``close``/requ
 
 from __future__ import annotations
 
-import asyncio
 import time
 from collections.abc import AsyncIterator, Iterable, Sequence
 from types import TracebackType
 from typing import Any
 
-from .config import ClientConfig, parse_dsn
+from .backends.auradb import _ERROR_CODE_MAP as _ERROR_CODE_MAP  # re-exported for compatibility
+from .backends.auradb import ProtocolBackend, error_from_frame
+from .backends.base import Backend, BackendResult
+from .config import ClientConfig
 from .errors import (
-    AuraAuthenticationError,
-    AuraAuthorizationError,
+    AuraBackendCapabilityError,
     AuraClientClosedError,
     AuraConnectionError,
-    AuraConstraintError,
-    AuraError,
-    AuraNotFoundError,
-    AuraProtocolError,
     AuraQueryError,
     AuraSchemaError,
     AuraServerError,
-    AuraValidationError,
 )
 from .hydration.hydrator import Hydrator
 from .models import AuraModel, get_model
 from .observability import Metrics, TelemetryConfig, _TelemetryBridge
 from .protocol.frames import Frame
-from .protocol.messages import (
-    CursorClose,
-    CursorFetch,
-    ErrorBody,
-    HandshakeRequest,
-    MutationRequest,
-    MutationResultBody,
-    PingRequest,
-    PongResponse,
-    QueryRequest,
-    QueryResultBody,
-    SchemaRequest,
-    TxControl,
-    decode_body,
-    encode_body,
-)
-from .protocol.opcodes import PROTOCOL_VERSION, Opcode
+from .protocol.opcodes import PROTOCOL_VERSION
 from .query.ast import InsertQuery, QueryNode, RawQuery, UpsertQuery
 from .query.builder import (
     DeleteBuilder,
@@ -59,32 +39,11 @@ from .query.builder import (
     UpdateBuilder,
 )
 from .query.expressions import FieldReference
-from .schema.compiler import schema_document
 from .transport.base import Transport
-from .transport.memory import MemoryTransport
-from .transport.tcp import TCPTransport
 
 __all__ = ["Aura", "Client", "Transaction", "connect"]
 
 _MUTATION_OPS = frozenset({"insert", "update", "delete", "upsert"})
-
-_ERROR_CODE_MAP: dict[str, type[AuraError]] = {
-    "validation_error": AuraValidationError,
-    "query_error": AuraQueryError,
-    "schema_error": AuraSchemaError,
-    "not_found": AuraNotFoundError,
-    "constraint_violation": AuraConstraintError,
-    "authentication_error": AuraAuthenticationError,
-    "authorization_error": AuraAuthorizationError,
-    "protocol_error": AuraProtocolError,
-    "server_error": AuraServerError,
-}
-
-
-def _make_transport(config: ClientConfig) -> Transport:
-    if config.is_memory:
-        return MemoryTransport(max_payload_bytes=config.max_payload_bytes)
-    return TCPTransport(config)
 
 
 def _field_name(key: Any) -> str:
@@ -132,22 +91,32 @@ class Client:
     def __init__(
         self,
         config: ClientConfig,
-        transport: Transport,
+        transport: Transport | None = None,
         models: Iterable[type[AuraModel]] = (),
         *,
         telemetry: Any = None,
+        backend: Backend | None = None,
+        metrics: Metrics | None = None,
+        telemetry_bridge: _TelemetryBridge | None = None,
     ) -> None:
         self._config = config
-        self._transport = transport
+        self._metrics = metrics if metrics is not None else Metrics()
+        self._telemetry = (
+            telemetry_bridge
+            if telemetry_bridge is not None
+            else _TelemetryBridge(TelemetryConfig.from_value(telemetry))
+        )
+        if backend is None:
+            if transport is None:
+                raise AuraConnectionError("Client requires either a transport or a backend")
+            backend = ProtocolBackend(config, transport, self._metrics, self._telemetry)
+        self._backend = backend
         self._registry: dict[str, type[AuraModel]] = {}
         self._hydrator = Hydrator()
         self._closed = False
         self._opened = False
-        self._request_counter = 0
         self._tx_counter = 0
         self._root_executor = _BoundExecutor(self, 0)
-        self._metrics = Metrics()
-        self._telemetry = _TelemetryBridge(TelemetryConfig.from_value(telemetry))
         for model in models:
             self.register_model(model)
 
@@ -163,21 +132,40 @@ class Client:
     ) -> _ClientConnector:
         """Return a connector that is both awaitable and an async context manager."""
         telemetry = options.pop("telemetry", None)
-        config = parse_dsn(dsn, **options)
-        return _ClientConnector(cls, config, tuple(models), transport, telemetry)
+        return _ClientConnector(cls, dsn, tuple(models), transport, telemetry, options)
 
     @property
     def config(self) -> ClientConfig:
         return self._config
 
     @property
+    def backend(self) -> Backend:
+        """The storage backend this client executes against."""
+        return self._backend
+
+    @property
     def transport(self) -> Transport:
-        return self._transport
+        """The underlying transport for protocol backends.
+
+        Available only when this client runs over the Aura Wire Protocol (the AuraDB and
+        memory backends). Other backends speak to a database driver and expose no transport.
+        """
+        transport: Transport | None = getattr(self._backend, "transport", None)
+        if transport is None:
+            raise AuraBackendCapabilityError(
+                f"Backend {self._backend.name!r} does not expose a wire transport",
+                context={"backend": self._backend.name},
+            )
+        return transport
 
     @property
     def metrics(self) -> Metrics:
         """In-process observability metrics for this client."""
         return self._metrics
+
+    def capabilities(self) -> Any:
+        """Return the backend's :class:`~aura.backends.capabilities.BackendCapabilities`."""
+        return self._backend.capabilities()
 
     @property
     def is_closed(self) -> bool:
@@ -203,42 +191,16 @@ class Client:
             ) from exc
 
     async def _open(self) -> None:
-        await self._transport.connect()
-        await self._handshake()
+        await self._backend.connect()
         if self._registry:
-            await self._register_schema()
+            await self._backend.create_schema(self._registry.values())
         self._opened = True
-
-    async def _handshake(self) -> None:
-        auth = self._config.auth.headers() if self._config.auth else {}
-        body = HandshakeRequest(client_version=PROTOCOL_VERSION, features=["query"], auth=auth)
-        frame = Frame(
-            opcode=Opcode.HANDSHAKE,
-            payload=encode_body(body.to_payload()),
-            request_id=self._next_request_id(),
-        )
-        response = await self._request(frame)
-        if response.opcode is Opcode.ERROR:
-            self._raise_error(response)
-        if response.opcode is not Opcode.HANDSHAKE_ACK:
-            raise AuraProtocolError("Server did not acknowledge handshake")
-
-    async def _register_schema(self) -> None:
-        document = schema_document(self._registry.values())
-        frame = Frame(
-            opcode=Opcode.SCHEMA,
-            payload=encode_body({"models": document["models"]}),
-            request_id=self._next_request_id(),
-        )
-        response = await self._request(frame)
-        if response.opcode is Opcode.ERROR:
-            self._raise_error(response)
 
     async def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        await self._transport.close()
+        await self._backend.close()
 
     async def __aenter__(self) -> Client:
         if not self._opened:
@@ -255,19 +217,9 @@ class Client:
 
     # -- health ------------------------------------------------------------------
     async def ping(self) -> bool:
-        """Round-trip a ping; returns ``True`` on a matching pong."""
+        """Round-trip a ping; returns ``True`` when the backend is reachable."""
         self._ensure_open()
-        nonce = self._next_request_id()
-        frame = Frame(
-            opcode=Opcode.PING,
-            payload=encode_body(PingRequest(nonce=nonce).to_payload()),
-            request_id=nonce,
-        )
-        response = await self._request(frame)
-        if response.opcode is Opcode.ERROR:
-            self._raise_error(response)
-        pong = PongResponse.from_payload(decode_body(response.payload))
-        return pong.nonce == nonce
+        return await self._backend.ping()
 
     async def health(self) -> dict[str, Any]:
         """Return a non-sensitive health/diagnostic snapshot."""
@@ -276,24 +228,25 @@ class Client:
             "status": "ok" if ok else "degraded",
             "protocol_version": PROTOCOL_VERSION,
             "address": self._config.address,
-            "transport": self._transport.describe(),
-            "stats": self._transport.stats.as_dict(),
+            "backend": self._backend.name,
+            "capabilities": self._backend.capabilities().to_dict(),
+            "transport": self._backend.describe(),
+            "stats": self._backend.stats(),
             "metrics": self._metrics.snapshot(),
             "models": sorted(self._registry),
         }
 
     async def server_schema(self) -> list[dict[str, Any]]:
-        """Fetch the schema the server currently knows about."""
+        """Fetch the schema the backend currently knows about (protocol backends only)."""
         self._ensure_open()
-        frame = Frame(
-            opcode=Opcode.SCHEMA,
-            payload=encode_body(SchemaRequest().to_payload()),
-            request_id=self._next_request_id(),
-        )
-        response = await self._request(frame)
-        if response.opcode is Opcode.ERROR:
-            self._raise_error(response)
-        return list(decode_body(response.payload).get("models", []))
+        fetch = getattr(self._backend, "server_schema", None)
+        if fetch is None:
+            raise AuraBackendCapabilityError(
+                f"Backend {self._backend.name!r} does not expose a server schema",
+                context={"backend": self._backend.name},
+            )
+        result: list[dict[str, Any]] = await fetch()
+        return result
 
     # -- query entry points ------------------------------------------------------
     def query(self, model: type[AuraModel]) -> QueryBuilder:
@@ -364,182 +317,73 @@ class Client:
     async def _execute(self, node: QueryNode, model: type[AuraModel], txid: int) -> QueryResult:
         self._ensure_open()
         ir = node.to_ir()
-        is_mutation = node.operation in _MUTATION_OPS
-        opcode = Opcode.MUTATION if is_mutation else Opcode.QUERY
-        body = MutationRequest(ir=ir) if is_mutation else QueryRequest(ir=ir)
-
-        serialize_start = time.perf_counter()
-        payload = encode_body(body.to_payload())
-        self._metrics.serialize_latency.record(time.perf_counter() - serialize_start)
-
-        frame = Frame(
-            opcode=opcode,
-            payload=payload,
-            request_id=self._next_request_id(),
-            transaction_id=txid,
-        )
-        response = await self._send_frame(frame, node.operation, ir)
-
-        if response.opcode is Opcode.ERROR:
-            self._raise_error(response)
+        self._metrics.record_query(node.operation)
+        if node.operation in _MUTATION_OPS:
+            result = await self._backend.execute_mutation(ir, txid=txid)
+        else:
+            result = await self._backend.execute_query(ir, txid=txid)
 
         deserialize_start = time.perf_counter()
-        result = self._interpret(node, model, response)
+        interpreted = self._interpret(node, model, result)
         self._metrics.deserialize_latency.record(time.perf_counter() - deserialize_start)
-        return result
+        return interpreted
 
-    async def _send_frame(
-        self, frame: Frame, operation: str, ir: dict[str, Any] | None = None
-    ) -> Frame:
-        """Send a frame, recording the observability metric set and a telemetry span.
-
-        Transport-level failures (raised as :class:`AuraError`) are counted before being
-        re-raised; server error *frames* are counted by :meth:`_raise_error`.
-        """
-        self._metrics.record_query(operation)
-        stats = self._transport.stats
-        before_sent, before_recv = stats.bytes_sent, stats.bytes_received
-        before_fsent, before_frecv = stats.frames_sent, stats.frames_received
-
-        request_start = time.perf_counter()
-        try:
-            with self._telemetry.span(f"aura.{operation}", ir):
-                response = await self._request(frame)
-        except AuraError as exc:
-            self._metrics.record_error(exc.code)
-            raise
-        self._metrics.request_latency.record(time.perf_counter() - request_start)
-        self._metrics.record_bytes(
-            stats.bytes_sent - before_sent, stats.bytes_received - before_recv
-        )
-        self._metrics.record_frames(
-            stats.frames_sent - before_fsent, stats.frames_received - before_frecv
-        )
-        return response
-
-    def _interpret(self, node: QueryNode, model: type[AuraModel], response: Frame) -> QueryResult:
-        payload = decode_body(response.payload)
+    def _interpret(
+        self, node: QueryNode, model: type[AuraModel], result: BackendResult
+    ) -> QueryResult:
         operation = node.operation
 
-        if response.opcode is Opcode.MUTATION_RESULT:
-            body = MutationResultBody.from_payload(payload)
-            rows = self._hydrator.hydrate_rows(model, body.returning) if body.returning else []
-            return QueryResult(rows=rows, affected=body.affected, request_id=response.request_id)
-
-        if response.opcode is not Opcode.QUERY_RESULT:
-            raise AuraProtocolError(
-                f"Unexpected response opcode {response.opcode!r} for {operation}"
-            )
-
-        result = QueryResultBody.from_payload(payload)
+        if operation in _MUTATION_OPS:
+            rows = self._hydrator.hydrate_rows(model, result.rows) if result.rows else []
+            return QueryResult(rows=rows, affected=result.affected, request_id=result.request_id)
         if operation in {"count", "exists"}:
-            return QueryResult(count=result.count, request_id=response.request_id)
+            return QueryResult(count=result.count, request_id=result.request_id)
         if operation == "raw":
-            return QueryResult(rows=list(result.rows), request_id=response.request_id)
+            return QueryResult(rows=list(result.rows), request_id=result.request_id)
         if operation == "traverse":
             target_name = result.metadata.get("model", model.__name__)
             target = self._registry.get(target_name, model)
             rows = self._hydrator.hydrate_rows(target, result.rows)
-            return QueryResult(rows=rows, request_id=response.request_id)
+            return QueryResult(rows=rows, request_id=result.request_id)
 
         partial = bool(getattr(node, "projection", ()))
         rows = self._hydrator.hydrate_rows(model, result.rows, partial=partial)
         return QueryResult(
             rows=rows,
             count=result.count,
-            request_id=response.request_id,
+            request_id=result.request_id,
             metadata=dict(result.metadata),
         )
 
     async def _stream(
         self, node: QueryNode, model: type[AuraModel], batch_size: int, txid: int
     ) -> AsyncIterator[Any]:
-        """Yield rows page-by-page over a real server cursor.
+        """Yield hydrated rows page-by-page over a backend cursor.
 
-        Iteration is bounded: the client requests a cursor, then pulls one ``batch_size``
-        page at a time, holding at most one page in memory regardless of result size. If
-        the consumer stops early (``break``), the open server cursor is released and the
-        cancellation is counted; the client stays fully usable afterwards.
+        Iteration is bounded: the backend pulls one ``batch_size`` page at a time, holding
+        at most one page in memory regardless of result size. If the consumer stops early
+        (``break``/``aclose``), the backend releases the open cursor and the cancellation is
+        counted; the client stays fully usable afterwards.
         """
         self._ensure_open()
         if batch_size <= 0:
             raise AuraQueryError("batch_size must be positive")
 
-        cursor = await self._cursor_open(node, model, batch_size, txid)
-        page, token, has_more = cursor
+        self._metrics.record_query(node.operation)
+        pages = self._backend.stream_query(node.to_ir(), batch_size, txid=txid)
         cancelled = False
         try:
-            while True:
-                for row in page:
-                    yield row
-                if not token or not has_more:
-                    token = None
-                    break
-                page, token, has_more = await self._cursor_fetch(model, token, batch_size, txid)
+            async for raw in pages:
+                yield self._hydrator.hydrate_row(model, raw)
         except GeneratorExit:
-            # Consumer cancelled the stream early.
             cancelled = True
             raise
         finally:
-            if token:
-                # A live cursor remains (early break or cancellation): release it.
-                await self._cursor_release(token, txid)
+            aclose = getattr(pages, "aclose", None)
+            if aclose is not None:
+                await aclose()
             if cancelled:
                 self._metrics.record_stream_cancellation()
-
-    async def _cursor_open(
-        self, node: QueryNode, model: type[AuraModel], batch_size: int, txid: int
-    ) -> tuple[list[Any], str | None, bool]:
-        ir = {**node.to_ir(), "cursor": {"batch_size": batch_size}}
-        serialize_start = time.perf_counter()
-        payload = encode_body(QueryRequest(ir=ir).to_payload())
-        self._metrics.serialize_latency.record(time.perf_counter() - serialize_start)
-        frame = Frame(
-            opcode=Opcode.QUERY,
-            payload=payload,
-            request_id=self._next_request_id(),
-            transaction_id=txid,
-        )
-        response = await self._send_frame(frame, node.operation, ir)
-        return self._interpret_page(model, response)
-
-    async def _cursor_fetch(
-        self, model: type[AuraModel], token: str, batch_size: int, txid: int
-    ) -> tuple[list[Any], str | None, bool]:
-        frame = Frame(
-            opcode=Opcode.CURSOR_FETCH,
-            payload=encode_body(CursorFetch(cursor=token, batch_size=batch_size).to_payload()),
-            request_id=self._next_request_id(),
-            transaction_id=txid,
-        )
-        response = await self._send_frame(frame, "cursor_fetch")
-        return self._interpret_page(model, response)
-
-    async def _cursor_release(self, token: str, txid: int) -> None:
-        frame = Frame(
-            opcode=Opcode.CURSOR_CLOSE,
-            payload=encode_body(CursorClose(cursor=token).to_payload()),
-            request_id=self._next_request_id(),
-            transaction_id=txid,
-        )
-        response = await self._send_frame(frame, "cursor_close")
-        if response.opcode is Opcode.ERROR:
-            self._raise_error(response)
-
-    def _interpret_page(
-        self, model: type[AuraModel], response: Frame
-    ) -> tuple[list[Any], str | None, bool]:
-        if response.opcode is Opcode.ERROR:
-            self._raise_error(response)
-        if response.opcode is not Opcode.QUERY_RESULT:
-            raise AuraProtocolError(f"Unexpected response opcode {response.opcode!r} for stream")
-        deserialize_start = time.perf_counter()
-        result = QueryResultBody.from_payload(decode_body(response.payload))
-        rows = self._hydrator.hydrate_rows(model, result.rows)
-        self._metrics.deserialize_latency.record(time.perf_counter() - deserialize_start)
-        token = result.metadata.get("cursor")
-        has_more = bool(result.metadata.get("has_more"))
-        return rows, (str(token) if token else None), has_more
 
     # -- mutation helpers (shared by client and transactions) --------------------
     async def _insert_obj(
@@ -592,58 +436,32 @@ class Client:
         row: AuraModel = result.rows[0]
         return row
 
-    # -- transaction control frames ----------------------------------------------
-    async def _tx_control(self, opcode: Opcode, txid: int, action: str, isolation: str) -> None:
-        frame = Frame(
-            opcode=opcode,
-            payload=encode_body(TxControl(action=action, isolation=isolation).to_payload()),
-            request_id=self._next_request_id(),
-            transaction_id=txid,
-        )
-        response = await self._request(frame)
-        if response.opcode is Opcode.ERROR:
-            self._raise_error(response)
-
-    # -- low-level request with bounded retry ------------------------------------
-    async def _request(self, frame: Frame) -> Frame:
-        policy = self._config.retry
-        last_error: AuraError | None = None
-        for attempt in range(1, policy.max_attempts + 1):
-            delay = policy.delay_for_attempt(attempt)
-            if delay:
-                await asyncio.sleep(delay)
-            if attempt > 1:
-                self._metrics.record_retry(1)
-            try:
-                return await self._transport.request(frame)
-            except AuraError as exc:
-                last_error = exc
-                if not exc.retryable or attempt >= policy.max_attempts:
-                    raise
-        assert last_error is not None
-        raise last_error
+    # -- transaction control -----------------------------------------------------
+    async def _tx_control(self, action: str, txid: int, isolation: str) -> None:
+        if action == "begin":
+            await self._backend.begin(txid, isolation)
+        elif action == "commit":
+            await self._backend.commit(txid, isolation)
+        elif action == "rollback":
+            await self._backend.rollback(txid, isolation)
+        else:  # pragma: no cover - guarded by callers
+            raise AuraQueryError(f"Unknown transaction action {action!r}")
 
     def _raise_error(self, frame: Frame) -> None:
-        body = ErrorBody.from_payload(decode_body(frame.payload))
-        self._metrics.record_error(body.code)
-        error_cls = _ERROR_CODE_MAP.get(body.code, AuraServerError)
-        raise error_cls(
-            body.message or "Server error",
-            code=body.code,
-            retryable=body.retryable,
-            request_id=frame.request_id,
-            context=body.context,
-        )
+        """Map a protocol ``ERROR`` frame to a typed exception and record it.
+
+        Retained as a stable entry point; the canonical error map lives in the AuraDB
+        backend (:data:`aura.backends.auradb._ERROR_CODE_MAP`).
+        """
+        error = error_from_frame(frame)
+        self._metrics.record_error(error.code)
+        raise error
 
     def _ensure_open(self) -> None:
         if self._closed:
             raise AuraClientClosedError("Client is closed")
         if not self._opened:
             raise AuraConnectionError("Client is not connected; use 'async with' or await connect")
-
-    def _next_request_id(self) -> int:
-        self._request_counter = (self._request_counter + 1) % (2**63)
-        return self._request_counter or 1
 
 
 class Transaction:
@@ -689,19 +507,19 @@ class Transaction:
         return await self._client._upsert_obj(model, key, values, self._txid)
 
     async def begin(self) -> None:
-        await self._client._tx_control(Opcode.BEGIN_TX, self._txid, "begin", self._isolation)
+        await self._client._tx_control("begin", self._txid, self._isolation)
 
     async def commit(self) -> None:
         if self._finished:
             return
         self._finished = True
-        await self._client._tx_control(Opcode.COMMIT_TX, self._txid, "commit", self._isolation)
+        await self._client._tx_control("commit", self._txid, self._isolation)
 
     async def rollback(self) -> None:
         if self._finished:
             return
         self._finished = True
-        await self._client._tx_control(Opcode.ROLLBACK_TX, self._txid, "rollback", self._isolation)
+        await self._client._tx_control("rollback", self._txid, self._isolation)
 
     async def __aenter__(self) -> Transaction:
         await self.begin()
@@ -722,26 +540,44 @@ class Transaction:
 class _ClientConnector:
     """Awaitable + async-context-manager wrapper returned by :meth:`Client.connect`."""
 
-    __slots__ = ("_client", "_cls", "_config", "_models", "_telemetry", "_transport")
+    __slots__ = ("_client", "_cls", "_dsn", "_models", "_options", "_telemetry", "_transport")
 
     def __init__(
         self,
         cls: type[Client],
-        config: ClientConfig,
+        dsn: str,
         models: tuple[type[AuraModel], ...],
         transport: Transport | None,
         telemetry: Any = None,
+        options: dict[str, Any] | None = None,
     ) -> None:
         self._cls = cls
-        self._config = config
+        self._dsn = dsn
         self._models = models
         self._transport = transport
         self._telemetry = telemetry
+        self._options = options or {}
         self._client: Client | None = None
 
     async def _create(self) -> Client:
-        transport = self._transport or _make_transport(self._config)
-        client = self._cls(self._config, transport, self._models, telemetry=self._telemetry)
+        from .backends.registry import resolve_backend
+
+        metrics = Metrics()
+        telemetry = _TelemetryBridge(TelemetryConfig.from_value(self._telemetry))
+        config, backend = resolve_backend(
+            self._dsn,
+            metrics=metrics,
+            telemetry=telemetry,
+            transport=self._transport,
+            **self._options,
+        )
+        client = self._cls(
+            config,
+            backend=backend,
+            models=self._models,
+            metrics=metrics,
+            telemetry_bridge=telemetry,
+        )
         await client._open()
         return client
 

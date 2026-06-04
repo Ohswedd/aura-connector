@@ -7,6 +7,12 @@ available but the names exported here are the stable, user-facing entry points.
 from __future__ import annotations
 
 from ._native import native_status
+from .backends import (
+    Backend,
+    BackendCapabilities,
+    BackendResult,
+    resolve_backend,
+)
 from .client import Aura, Client, Transaction, connect
 from .config import (
     ClientConfig,
@@ -20,10 +26,14 @@ from .config import (
 from .errors import (
     AuraAuthenticationError,
     AuraAuthorizationError,
+    AuraBackendCapabilityError,
+    AuraBackendError,
     AuraClientClosedError,
     AuraConnectionError,
     AuraConstraintError,
     AuraConstraintViolation,
+    AuraDialectError,
+    AuraDriverNotInstalledError,
     AuraError,
     AuraMigrationError,
     AuraNonRetryableTransactionError,
@@ -102,6 +112,11 @@ __all__ = [
     "query_fingerprint",
     # native acceleration diagnostics (optional in-repo extra)
     "native_status",
+    # backends
+    "Backend",
+    "BackendCapabilities",
+    "BackendResult",
+    "resolve_backend",
     # config
     "ClientConfig",
     "parse_dsn",
@@ -112,6 +127,10 @@ __all__ = [
     "PoolConfig",
     # errors
     "AuraError",
+    "AuraBackendError",
+    "AuraBackendCapabilityError",
+    "AuraDialectError",
+    "AuraDriverNotInstalledError",
     "AuraConnectionError",
     "AuraClientClosedError",
     "AuraTimeoutError",

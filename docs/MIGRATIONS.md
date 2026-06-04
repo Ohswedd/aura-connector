@@ -5,6 +5,21 @@ Aura compiles models into a deterministic schema document (see
 human-reviewable migration plan. The diff is computed entirely locally, no server is
 required, and classifies every change as safe or destructive, with rollback metadata.
 
+## Schema creation and migration across backends
+
+Schema behaviour follows each backend's [capabilities](BACKEND_CAPABILITY_MATRIX.md):
+
+- **Local diff** (`diff_schemas` / `generate_migration` / `db.backend.diff_schema(models)`)
+  is model-based and works for every backend — it never touches a server.
+- **Backend schema creation** runs on connect for the models you pass:
+  - SQLite / PostgreSQL / MySQL create tables, constraints, and indexes
+    (`CREATE TABLE IF NOT EXISTS`); to-one relationships become foreign-key columns.
+  - MongoDB creates collections and the indexes implied by `unique`/`index` fields.
+  - Redis validates the key schema (it requires a primary key) and is otherwise a no-op.
+- **Applying** a migration live is only available where capabilities declare
+  `schema_migrations`. Aura does **not** fake destructive live migration application — the
+  local diff tells you what would change; applying it is an explicit, backend-specific step.
+
 ## Diffing schemas
 
 ```python

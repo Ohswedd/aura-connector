@@ -2,16 +2,23 @@
 
 ## Install
 
+The base install is dependency-free. Add an extra for the backend you want to use:
+
 ```bash
-python -m pip install -e ".[dev]"
+python -m pip install aura-connector             # core (memory + AuraDB protocol)
+python -m pip install "aura-connector[sqlite]"   # local SQLite
+python -m pip install "aura-connector[postgres]" # PostgreSQL
+python -m pip install -e ".[dev,sqlite]"         # from a checkout, for development
 ```
 
-Aura requires Python 3.11+.
+Aura requires Python 3.11+. See [BACKENDS.md](BACKENDS.md) for every backend, its DSN
+schemes, and its extra.
 
 ## Your first query
 
 The `aura+memory://` scheme runs a complete in-process reference server, so you can
-build and test a full application without a live AuraDB cluster.
+build and test a full application without a live AuraDB cluster. The same code runs against
+SQLite by changing only the DSN — `sqlite://` (in-memory) or `sqlite:///app.db` (file).
 
 ```python
 import asyncio

@@ -23,7 +23,7 @@ functions run directly. Warnings are errors (`filterwarnings = ["error"]`).
 ## Validation gate
 
 ```bash
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,sqlite]"
 python -m ruff check .
 python -m ruff format --check .
 python -m mypy src
@@ -31,6 +31,31 @@ python -m pytest
 python -m compileall src tests examples
 python -m build
 ```
+
+## Backend tests
+
+The default suite runs with **no external services**. SQLite integration tests
+(`tests/integration/test_sqlite_*.py`) run by default because SQLite is local; the SQL
+compiler, dialect, schema, injection-safety, DSN-routing, capability, and driver-missing
+checks are pure unit tests.
+
+Tests for PostgreSQL, MySQL/MariaDB, MongoDB, and Redis are **optional and
+environment-gated**: each skips cleanly unless its DSN env var is set. Stand the services up
+with Docker and run them explicitly:
+
+```bash
+docker compose -f docker-compose.backends.yml up -d
+export AURA_TEST_POSTGRES_DSN=postgresql://postgres:postgres@localhost:5432/aura_test
+export AURA_TEST_MYSQL_DSN=mysql://root:password@localhost:3306/aura_test
+export AURA_TEST_MONGODB_DSN=mongodb://localhost:27017/aura_test
+export AURA_TEST_REDIS_DSN=redis://localhost:6379/0
+python -m pip install -e ".[dev,all-db]"
+python -m pytest tests/integration -vv
+docker compose -f docker-compose.backends.yml down -v
+```
+
+The `.github/workflows/databases.yml` workflow runs the same gated tests against service
+containers in CI, separately from the lightweight main workflow.
 
 ## Benchmarks
 

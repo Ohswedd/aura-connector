@@ -108,6 +108,20 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     else:
         native_line = "unavailable (pure-python fallback active)"
 
+    # Backend driver availability. The base install is dependency-free; each driver is an
+    # optional extra. "available" means the matching backend can connect in this environment.
+    backend_drivers = {
+        "sqlite": "aiosqlite",
+        "postgres": "asyncpg",
+        "mysql": "aiomysql",
+        "mongodb": "motor",
+        "redis": "redis",
+    }
+    backends = {
+        extra: "available" if _present(module) else f"install: aura-connector[{extra}]"
+        for extra, module in backend_drivers.items()
+    }
+
     report = {
         "aura_version": __version__,
         "python_version": ".".join(str(p) for p in sys.version_info[:3]),
@@ -120,6 +134,9 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     }
     for key, value in report.items():
         print(f"{key}: {value}")
+    print("backends:")
+    for extra, state in backends.items():
+        print(f"  {extra}: {state}")
     return 0
 
 

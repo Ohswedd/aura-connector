@@ -14,10 +14,14 @@ from typing import Any
 __all__ = [
     "AuraAuthenticationError",
     "AuraAuthorizationError",
+    "AuraBackendCapabilityError",
+    "AuraBackendError",
     "AuraClientClosedError",
     "AuraConnectionError",
     "AuraConstraintError",
     "AuraConstraintViolation",
+    "AuraDialectError",
+    "AuraDriverNotInstalledError",
     "AuraError",
     "AuraMigrationError",
     "AuraNonRetryableTransactionError",
@@ -210,6 +214,44 @@ class AuraNonRetryableTransactionError(AuraTransactionError):
     """Raised when a transaction fails and must not be retried."""
 
     default_code = "non_retryable_transaction_error"
+
+
+class AuraBackendError(AuraError):
+    """Base class for errors raised by a storage backend adapter.
+
+    Backends translate driver-specific failures into the Aura taxonomy. When no more
+    specific Aura error applies, the adapter raises this with a stable ``code``.
+    """
+
+    default_code = "backend_error"
+
+
+class AuraBackendCapabilityError(AuraBackendError):
+    """Raised when an operation requires a capability the backend does not provide.
+
+    The error carries the backend name and the missing capability in its ``context`` so
+    callers can branch on capabilities rather than catch-and-guess. Aura never silently
+    emulates a feature a backend lacks (for example vector search on a backend without a
+    vector index); it raises this instead.
+    """
+
+    default_code = "backend_capability_error"
+
+
+class AuraDialectError(AuraBackendError):
+    """Raised when a query or type cannot be expressed in a backend's SQL dialect."""
+
+    default_code = "dialect_error"
+
+
+class AuraDriverNotInstalledError(AuraBackendError):
+    """Raised when a backend's database driver package is not installed.
+
+    The message includes the precise ``pip install`` command for the matching extra, for
+    example ``pip install aura-connector[postgres]``.
+    """
+
+    default_code = "driver_not_installed"
 
 
 class RelationshipNotLoadedError(AuraError):

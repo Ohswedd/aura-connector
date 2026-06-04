@@ -1,0 +1,103 @@
+name: Databases
+
+# Optional backend integration tests against real database services. The main CI workflow
+# stays lightweight (SQLite only); this workflow stands up PostgreSQL, MySQL/MariaDB,
+# MongoDB, and Redis as service containers and runs the environment-gated integration tests.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: databases-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    name: Backend integration tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aura_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      mysql:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: password
+          MARIADB_DATABASE: aura_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      AURA_TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/aura_test
+      AURA_TEST_MYSQL_DSN: mysql://root:password@localhost:3306/aura_test
+      AURA_TEST_MONGODB_DSN: mongodb://localhost:27017/aura_test
+      AURA_TEST_REDIS_DSN: redis://localhost:6379/0
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[dev,all-db]"
+
+      - name: Run backend integration tests
+        run: |
+          python -m pytest \
+            tests/integration/test_sqlite_backend.py \
+            tests/integration/test_postgres_backend.py \
+            tests/integration/test_mysql_backend.py \
+            tests/integration/test_mongodb_backend.py \
+            tests/integration/test_redis_backend.py \
+            -vv

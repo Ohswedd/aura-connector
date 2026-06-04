@@ -4,6 +4,13 @@ The builder is fluent and immutable: every chained call returns a new builder wr
 an updated AST. Builders never concatenate strings, they produce an injection-safe
 Query IR.
 
+The same builder works across every backend: the IR it produces is executed by the AuraDB
+protocol, compiled to parameterized SQL by the relational backends (see
+[SQL_COMPILER.md](SQL_COMPILER.md)), or translated to structured MongoDB documents. Features a
+backend does not support (for example `nearest()` on SQLite, or a relational filter on Redis)
+raise `AuraBackendCapabilityError` instead of being approximated — check
+`client.capabilities()` or the [capability matrix](BACKEND_CAPABILITY_MATRIX.md).
+
 ## Reads
 
 ```python

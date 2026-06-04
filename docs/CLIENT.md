@@ -17,9 +17,20 @@ async with Client.connect("aura+memory://localhost/app", models=[User]) as clien
     ...
 ```
 
-DSN schemes: `aura` (TCP), `auras` (TLS TCP), `aura+tcp`, `aura+memory`
-(in-memory reference server). Query parameters tune behaviour, e.g.
-`?connect_timeout=5&request_timeout=30&compression=true`.
+AuraDB/memory DSN schemes: `aura` (TCP), `auras` (TLS TCP), `aura+tcp`, `aura+memory`
+and `memory` (in-memory reference server). Query parameters tune behaviour, e.g.
+`?connect_timeout=5&request_timeout=30&compression=true`. Database-backend schemes
+(`sqlite`, `postgres`, `mysql`/`mariadb`, `mongodb`, `redis`) select an adapter instead — see
+[BACKENDS.md](BACKENDS.md). The client API is identical regardless of backend.
+
+## Backend and capabilities
+
+The client executes against a backend selected by the DSN scheme. Inspect it via
+`client.backend` (the `Backend` instance) and `client.capabilities()` (its
+`BackendCapabilities`). Calling a feature the backend does not support raises
+`AuraBackendCapabilityError` rather than emulating it. `client.transport` is available only
+for the protocol backends (AuraDB and memory); other backends raise a capability error if you
+ask for a transport, because they speak to a database driver, not the wire protocol.
 
 ## Model registry and dynamic access
 

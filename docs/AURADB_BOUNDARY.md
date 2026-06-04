@@ -7,12 +7,20 @@ plus a complete in-memory reference server for local development and testing.
 The AuraDB server itself is a separate project. This page states exactly where the
 connector ends and the server begins, so nothing on either side is overclaimed.
 
+AuraDB remains the **native, high-performance backend** over the Aura Wire Protocol. The
+SQL, document, and key-value [backends](BACKENDS.md) are adapters that make the same typed
+API useful with databases you already run; they cover a subset of AuraDB's features, declared
+honestly in the [capability matrix](BACKEND_CAPABILITY_MATRIX.md). The boundary described
+below is specifically the connector↔AuraDB-server boundary.
+
 ## Implemented in this package
 
 - Typed model system, fields, and first-class vector fields.
 - Fluent, injection-safe query builder that compiles to an immutable AST and Query IR.
 - Deterministic binary wire protocol with framing, checksums, and length limits.
 - Transport abstraction with a TCP transport and an in-memory reference transport.
+- A backend adapter layer: AuraDB (native protocol), the in-memory reference engine, and
+  SQLite, PostgreSQL, MySQL/MariaDB, MongoDB, and Redis adapters.
 - Result hydration into typed model instances, including relationships and vectors.
 - Schema generation and local migration diffing with a destructive-change CI gate.
 - In-process observability: metrics, latency percentiles, and query fingerprints.

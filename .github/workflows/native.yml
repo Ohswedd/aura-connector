@@ -46,7 +46,7 @@ jobs:
       - name: Install connector and tooling
         run: |
           python -m pip install -U pip
-          python -m pip install -e ".[dev,native]"
+          python -m pip install -e ".[dev,native,sqlite]"
           python -m pip install maturin
 
       - name: Build native extension

@@ -4,13 +4,26 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aura-connector"
-version = "0.1.0"
-description = "Async-native, type-safe Python client and connector for AuraDB."
+version = "0.2.0"
+description = "Async, typed Python data connector for AuraDB and existing databases."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Aura Maintainers" }]
-keywords = ["database", "async", "client", "vector", "orm", "connector", "auradb"]
+keywords = [
+    "database",
+    "async",
+    "client",
+    "vector",
+    "orm",
+    "connector",
+    "auradb",
+    "sqlite",
+    "postgresql",
+    "mysql",
+    "mongodb",
+    "redis",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Framework :: AsyncIO",
@@ -33,6 +46,16 @@ dev = [
     "mypy>=1.11",
     "build>=1.2",
 ]
+# Database backend drivers. The base install is dependency-free; install only the extras
+# for the backends you use. See docs/BACKENDS.md for the DSN scheme each backend serves.
+sqlite = ["aiosqlite>=0.19"]
+postgres = ["asyncpg>=0.29"]
+mysql = ["aiomysql>=0.2"]
+mongodb = ["motor>=3.4"]
+redis = ["redis>=5.0"]
+# Convenience bundles.
+sql = ["aiosqlite>=0.19", "asyncpg>=0.29", "aiomysql>=0.2"]
+all-db = ["aiosqlite>=0.19", "asyncpg>=0.29", "aiomysql>=0.2", "motor>=3.4", "redis>=5.0"]
 # Optional native acceleration. Installs the maturin build tool used to compile
 # the in-repository `aura_native` extension (crates/aura_native). The connector
 # itself never requires Rust: the pure-Python fallback in aura._native is always
@@ -105,4 +128,11 @@ disallow_any_explicit = false
 # and without the native extra built.
 [[tool.mypy.overrides]]
 module = "aura_native"
+ignore_missing_imports = true
+
+# Optional database drivers may or may not be installed and ship without type stubs. The
+# backends import them lazily and the pure-Python core never requires them, so mypy must not
+# error on their absence regardless of which extras are installed.
+[[tool.mypy.overrides]]
+module = ["aiosqlite", "asyncpg", "aiomysql"]
 ignore_missing_imports = true

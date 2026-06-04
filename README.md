@@ -2,7 +2,7 @@
 
 # Aura Connector
 
-**Async-native, type-safe Python client and connector for AuraDB.**
+**A typed async data connector for AuraDB and existing databases.**
 
 [![CI](https://github.com/Ohswedd/aura-connector/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohswedd/aura-connector/actions/workflows/ci.yml)
 [![Native](https://github.com/Ohswedd/aura-connector/actions/workflows/native.yml/badge.svg)](https://github.com/Ohswedd/aura-connector/actions/workflows/native.yml)
@@ -14,14 +14,20 @@
 
 </div>
 
-Aura Connector gives Python teams ORM-level productivity with driver-level control.
-Declare typed models once, compose queries with a fluent, injection-safe builder, and
-execute relational, document, vector, hybrid, and graph workloads through a single async
-client over a deterministic binary wire protocol.
+Aura Connector is an async, typed Python data connector that gives teams **one model and
+query API** across AuraDB, SQLite, PostgreSQL, MySQL/MariaDB, MongoDB, Redis, and an in-memory
+reference backend. Declare typed models once, compose queries with a fluent, injection-safe
+builder, and run them against whichever backend you choose by changing only the DSN.
 
-It is useful today: the package ships an in-memory reference server and a complete
-pure-Python core, so the examples and the full test suite run with no external database
-and no compiler.
+AuraDB remains the **native, high-performance backend** with the strongest path through the
+Aura Wire Protocol; the backend adapters make Aura useful immediately with infrastructure you
+already run. Feature differences between backends are represented honestly through
+[backend capabilities](docs/BACKEND_CAPABILITY_MATRIX.md) — unsupported features raise a
+structured error rather than being emulated.
+
+It is useful today with zero setup: the package ships an in-memory reference server and
+first-class SQLite support, so the examples and the full default test suite run with no
+external database and no compiler.
 
 ```python
 import asyncio
@@ -131,12 +137,23 @@ cluster) live in a separate project and are not implemented or claimed here. See
 
 ## Installation
 
+The base install is dependency-free and includes the AuraDB protocol and in-memory backends.
+Add an extra for each database backend you want to use:
+
 ```bash
-pip install aura-connector                 # pure-Python, always works, no compiler
+pip install aura-connector                 # core: AuraDB protocol + in-memory backend
+pip install "aura-connector[sqlite]"       # SQLite        (aiosqlite)
+pip install "aura-connector[postgres]"     # PostgreSQL    (asyncpg)
+pip install "aura-connector[mysql]"        # MySQL/MariaDB (aiomysql)
+pip install "aura-connector[mongodb]"      # MongoDB       (motor)
+pip install "aura-connector[redis]"        # Redis         (redis.asyncio)
+pip install "aura-connector[sql]"          # SQLite + PostgreSQL + MySQL
+pip install "aura-connector[all-db]"       # every database driver
 pip install "aura-connector[native]"       # + optional native acceleration tooling
 ```
 
-The import package name is `aura`:
+Selecting a backend whose driver is not installed raises `AuraDriverNotInstalledError` with
+the exact install command. The import package name is `aura`:
 
 ```python
 import aura
@@ -145,7 +162,7 @@ import aura
 Development install from a clone:
 
 ```bash
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,sqlite]"
 ```
 
 Requires Python 3.11 or newer. The pure-Python path needs no compiler. Optional native
@@ -159,23 +176,78 @@ aura doctor   # native_acceleration: available
 
 See [Native acceleration](docs/NATIVE_ACCELERATION.md).
 
+## Backends
+
+The DSN scheme selects the backend — nothing else in your code changes:
+
+| Scheme(s) | Backend | Extra |
+|---|---|---|
+| `aura://`, `auras://`, `aura+tcp://` | AuraDB (native Aura Wire Protocol) | — |
+| `aura+memory://`, `memory://` | In-memory reference engine | — |
+| `sqlite://`, `sqlite+aiosqlite://` | SQLite (first-class local) | `[sqlite]` |
+| `postgres://`, `postgresql://`, `postgresql+asyncpg://` | PostgreSQL | `[postgres]` |
+| `mysql://`, `mariadb://`, `…+aiomysql://` | MySQL / MariaDB | `[mysql]` |
+| `mongodb://`, `mongodb+motor://` | MongoDB (document-native) | `[mongodb]` |
+| `redis://`, `redis+asyncio://` | Redis (limited key-value / cache) | `[redis]` |
+
+See [docs/BACKENDS.md](docs/BACKENDS.md) and the
+[capability matrix](docs/BACKEND_CAPABILITY_MATRIX.md). Summary:
+
+| Capability | AuraDB | Memory | SQLite | PostgreSQL | MySQL | MongoDB | Redis |
+|---|---|---|---|---|---|---|---|
+| CRUD + filters | yes | yes | yes | yes | yes | yes | by key |
+| Transactions | yes | yes | yes | yes | yes | no¹ | no |
+| Relationships | yes | yes | yes | yes | yes | yes | no |
+| JSON / document fields | yes | yes | yes² | yes² | yes² | yes | yes |
+| Vector / hybrid search | yes | yes | no | no | no | no³ | no |
+| Graph traversal | yes | yes | no | no | no | no | no |
+
+¹ MongoDB transactions require a replica set. ² SQL backends store JSON/vector fields as JSON
+text (the documented fallback). ³ MongoDB vector search requires a configured vector index.
+Unsupported features raise `AuraBackendCapabilityError` — they are never silently emulated.
+
 ## Quick start
 
-Aura uses `aura://` DSNs:
-
-| Scheme | Meaning |
-|---|---|
-| `aura://host:port/db` | Plaintext TCP |
-| `auras://host:port/db` | TLS TCP |
-| `aura+tcp://...` | Explicit TCP |
-| `aura+memory://...` | In-memory reference server (tests, examples, local dev) |
-
-The in-memory reference server is a real implementation of the protocol and a query
-engine, so no live AuraDB cluster is required to run the examples or the test suite.
+The fastest start needs no external service — SQLite (local) or the in-memory reference
+engine. Switch to AuraDB or another database by changing only the DSN.
 
 ```python
-async with Aura.connect("aura+memory://localhost/app", models=[User]) as client:
-    await client.ping()
+import asyncio
+from aura import Aura, Model, Field
+
+class User(Model):
+    id: int = Field(primary_key=True)
+    email: str = Field(unique=True, index=True)
+    display_name: str | None = Field(default=None)
+
+async def main() -> None:
+    # SQLite — first-class local backend, no server required.
+    async with Aura.connect("sqlite:///app.db", models=[User]) as db:
+        await db.insert(User(id=1, email="ada@example.com", display_name="Ada"))
+        ada = await db.User.find(id=1)
+        print(ada.display_name)
+
+asyncio.run(main())
+```
+
+The same code runs against other backends by changing the DSN:
+
+```python
+# PostgreSQL
+async with Aura.connect("postgresql://user:pass@localhost:5432/app", models=[User]) as db:
+    users = await db.query(User).where(User.email.endswith("@example.com")).all()
+
+# MongoDB (document-native)
+async with Aura.connect("mongodb://localhost:27017/app", models=[User]) as db:
+    await db.insert(User(id=2, email="grace@example.com"))
+
+# In-memory reference engine (tests, examples, local dev)
+async with Aura.connect("aura+memory://localhost/app", models=[User]) as db:
+    await db.ping()
+
+# AuraDB — the native, high-performance target (TLS)
+async with Aura.connect("auras://cluster:7171/app", models=[User]) as db:
+    await db.ping()
 ```
 
 ## Model example
