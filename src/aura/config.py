@@ -33,7 +33,9 @@ DEFAULT_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024  # 64 MiB hard ceiling on a single 
 #: route to a protocol backend (AuraDB over a transport, or the in-process reference
 #: engine). Database-adapter schemes (``sqlite``/``postgres``/…) are parsed by the backend
 #: registry, which builds a lightweight config and the matching adapter.
-_VALID_SCHEMES = frozenset({"aura", "auras", "aura+tcp", "aura+memory", "memory"})
+_VALID_SCHEMES = frozenset(
+    {"aura", "auras", "aura+tcp", "aura+memory", "memory", "auradb", "auradbs"}
+)
 
 
 class _Redacted:
@@ -232,7 +234,7 @@ def parse_dsn(
     port = parts.port or DEFAULT_PORT
     database = parts.path.lstrip("/") or None
 
-    tls_enabled = scheme == "auras"
+    tls_enabled = scheme in {"auras", "auradbs"}
     resolved_tls = tls or TLSConfig(enabled=tls_enabled)
     if tls is None and tls_enabled:
         resolved_tls = TLSConfig(enabled=True)

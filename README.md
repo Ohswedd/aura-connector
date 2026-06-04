@@ -182,7 +182,8 @@ The DSN scheme selects the backend — nothing else in your code changes:
 
 | Scheme(s) | Backend | Extra |
 |---|---|---|
-| `aura://`, `auras://`, `aura+tcp://` | AuraDB (native Aura Wire Protocol) | — |
+| `auradb://`, `auradbs://` | **AuraDB v0.2.0 server** (native AWP 1 over TCP/TLS) — auth + TLS | — |
+| `aura://`, `auras://`, `aura+tcp://` | AuraDB reference protocol path (bundled; not the v0.2.0 server) | — |
 | `aura+memory://`, `memory://` | In-memory reference engine | — |
 | `sqlite://`, `sqlite+aiosqlite://` | SQLite (first-class local) | `[sqlite]` |
 | `postgres://`, `postgresql://`, `postgresql+asyncpg://` | PostgreSQL | `[postgres]` |
@@ -205,6 +206,34 @@ See [docs/BACKENDS.md](docs/BACKENDS.md) and the
 ¹ MongoDB transactions require a replica set. ² SQL backends store JSON/vector fields as JSON
 text (the documented fallback). ³ MongoDB vector search requires a configured vector index.
 Unsupported features raise `AuraBackendCapabilityError` — they are never silently emulated.
+
+### Native AuraDB backend (AuraDB v0.2.0)
+
+The `auradb://` (plaintext) and `auradbs://` (TLS) schemes connect to a running **AuraDB
+v0.2.0** server over the Aura Wire Protocol version 1, including static-token authentication,
+TLS, and transactions with read-your-writes:
+
+```python
+from aura import connect
+from aura.config import TokenAuth, TLSConfig
+
+async with connect(
+    "auradbs://db.example.com:7171/app",
+    models=[User],
+    auth=TokenAuth("my-secret-token"),
+    tls=TLSConfig(enabled=True, ca_cert_path="/etc/aura/ca.pem"),
+) as client:
+    async with client.transaction() as tx:
+        await tx.insert(User(id=1, email="ada@example.com"))
+        # Read-your-writes: visible inside the transaction, not outside until commit.
+        assert await tx.query(User).where(User.id == 1).count() == 1
+```
+
+**Compatibility:** Aura Connector 0.3.x talks to AuraDB 0.2.x over AWP 1. Aura Connector 0.2.x
+does **not** speak the new authenticated, TLS-capable native AWP path and cannot connect to an
+AuraDB v0.2.0 server — upgrade to 0.3.x. The legacy `aura://` schemes use the connector's
+bundled reference protocol path, not the AuraDB v0.2.0 network server. See
+[docs/AURADB.md](docs/AURADB.md).
 
 ## Quick start
 

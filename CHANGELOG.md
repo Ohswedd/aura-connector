@@ -7,6 +7,48 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-04
+
+Coordinated release with AuraDB v0.2.0. This adds a native AuraDB backend that speaks the
+Aura Wire Protocol version 1 (AWP 1) to a real AuraDB single-node server over TCP or TLS,
+including static-token authentication. The earlier in-process reference path (the `aura://`
+and `memory://` schemes) is unchanged.
+
+### Added
+
+- Native AuraDB backend reachable via the `auradb://` (plaintext) and `auradbs://` (TLS) DSN
+  schemes. It connects to a running AuraDB server, performs the AWP 1 handshake, translates
+  the Query IR to the server's Query IR and results back, and exposes the full client API:
+  schema create, insert, bulk insert, find, filter, document-path filters, full-text search,
+  count, exists, update, delete, upsert, vector nearest, server-side cursor streaming, and
+  transactions.
+- Static-token authentication for the native backend via `TokenAuth`: the token is presented
+  in the AWP handshake and an authentication failure raises `AuraAuthenticationError`.
+- TLS for the native backend via `TLSConfig` (CA trust, hostname verification, and optional
+  client certificates for mutual TLS).
+- AWP 1 codec (`aura.protocol.awp1`): a 44-byte framed, CRC32-checked wire format matching the
+  AuraDB server.
+
+- Transactions against AuraDB v0.2.0: `begin`/`commit`/`rollback` with read-your-writes.
+  Reads issued inside a transaction (find, filter, count, exists, vector nearest,
+  document-path, full-text, and cursor paging) observe the transaction's own staged writes
+  and not its staged deletes; those effects stay invisible to other connections until commit.
+  This relies on AuraDB v0.2.0's transaction-scoped reads, so it is the minimum server version
+  for transactional reads to behave correctly.
+
+### Compatibility
+
+- Aura Connector 0.3.x works with AuraDB 0.2.x over AWP 1 (`auradb://` plaintext, `auradbs://`
+  TLS), including static-token authentication and server-verified TLS.
+- Aura Connector 0.2.x does **not** speak the new authenticated, TLS-capable native AWP path
+  and cannot complete an AWP handshake with the AuraDB v0.2.0 network server. Upgrade to 0.3.x
+  to talk to AuraDB v0.2.0.
+
+### Notes
+
+- AuraDB server compatibility: this release targets AuraDB v0.2.0 (AWP 1). Connect with
+  `auradb://host:7171/db` (or `auradbs://...` for TLS).
+
 ## [0.2.0] - 2026-06-04
 
 Aura Connector evolves from an AuraDB-focused client into a multi-backend typed data
@@ -65,6 +107,7 @@ Initial public release.
 - Optional in-repository Rust/PyO3 native acceleration with a pure-Python fallback that is
   always available.
 
-[Unreleased]: https://github.com/Ohswedd/aura-connector/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Ohswedd/aura-connector/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Ohswedd/aura-connector/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Ohswedd/aura-connector/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Ohswedd/aura-connector/releases/tag/v0.1.0

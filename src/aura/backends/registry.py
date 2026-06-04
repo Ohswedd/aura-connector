@@ -44,6 +44,8 @@ SCHEME_FAMILY: dict[str, str] = {
     "aura": "auradb",
     "auras": "auradb",
     "aura+tcp": "auradb",
+    "auradb": "auradb_native",
+    "auradbs": "auradb_native",
     "aura+memory": "memory",
     "memory": "memory",
     "sqlite": "sqlite",
@@ -159,6 +161,12 @@ def resolve_backend(
     protocol schemes.
     """
     family = backend_family(dsn)
+
+    if family == "auradb_native":
+        from .auradb_native import AuraDBNativeBackend
+
+        config = parse_dsn(dsn, **options)
+        return config, AuraDBNativeBackend(config, metrics, telemetry)
 
     if family in {"auradb", "memory"}:
         from ..transport.memory import MemoryTransport

@@ -1,6 +1,6 @@
 [package]
 name = "aura_native"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 description = "Optional native acceleration for the Aura connector (CRC32 + fixed-dimension f32 vector packing)."
 license = "Apache-2.0"
