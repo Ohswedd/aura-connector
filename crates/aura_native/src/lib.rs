@@ -59,7 +59,7 @@ fn native_pack_f32_vector(py: Python<'_>, values: Vec<f64>, dimension: usize) ->
     for v in validated {
         out.extend_from_slice(&(v as f32).to_le_bytes());
     }
-    Ok(PyBytes::new_bound(py, &out).into())
+    Ok(PyBytes::new(py, &out).into())
 }
 
 /// Unpack contiguous little-endian f32 bytes into f64 components.
