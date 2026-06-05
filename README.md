@@ -396,6 +396,7 @@ pretending to succeed. See [AuraDB boundary](docs/AURADB_BOUNDARY.md).
 - [Observability](docs/OBSERVABILITY.md) and [Migrations](docs/MIGRATIONS.md)
 - [Errors](docs/ERRORS.md) and [Testing](docs/TESTING.md)
 - [Native Acceleration](docs/NATIVE_ACCELERATION.md) and [AuraDB Boundary](docs/AURADB_BOUNDARY.md)
+- [Roadmap](docs/ROADMAP.md)
 
 ## Benchmarks
 
