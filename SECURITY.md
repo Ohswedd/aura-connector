@@ -2,13 +2,13 @@
 
 ## Supported versions
 
-The project is at an early stage. Security fixes are applied to the latest released
-version on the `main` branch.
+Aura Connector is at `0.3.0`. Security fixes target the latest released version on
+the `main` branch.
 
 | Version | Supported |
 |---|---|
-| 0.1.x | yes |
-| < 0.1 | no |
+| 0.3.x | yes |
+| < 0.3 | no |
 
 ## Reporting a vulnerability
 
@@ -22,6 +22,25 @@ minimal reproduction if possible, and the affected version.
 
 You can expect an acknowledgement within a few business days. Once a fix is available we
 will coordinate a disclosure timeline with you.
+
+## Transport security and authentication
+
+The native AuraDB backend (`auradb://` plaintext, `auradbs://` TLS) supports:
+
+- **TLS** via `TLSConfig`: the server certificate is verified against a trusted CA with
+  hostname verification, and optional client certificates enable mutual TLS.
+- **Static-token authentication** via `TokenAuth`: the token is presented during the Aura
+  Wire Protocol handshake and is never logged; an authentication failure raises
+  `AuraAuthenticationError`.
+
+Credentials live in configuration objects that redact them in their `repr`, so logging a
+config does not expose a token or key.
+
+## Injection safety
+
+Queries are built through a typed, immutable builder that compiles to an abstract syntax
+tree and Query IR; they are never assembled by string concatenation, so a value can never
+be interpreted as query structure. Backend adapters bind values as parameters.
 
 ## Handling of secrets
 
