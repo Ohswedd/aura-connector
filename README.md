@@ -19,11 +19,11 @@ query API** across AuraDB, SQLite, PostgreSQL, MySQL/MariaDB, MongoDB, Redis, an
 reference backend. Declare typed models once, compose queries with a fluent, injection-safe
 builder, and run them against whichever backend you choose by changing only the DSN.
 
-AuraDB remains the **native, high-performance backend** with the strongest path through the
-Aura Wire Protocol; the backend adapters make Aura useful immediately with infrastructure you
-already run. Feature differences between backends are represented honestly through
-[backend capabilities](docs/BACKEND_CAPABILITY_MATRIX.md) — unsupported features raise a
-structured error rather than being emulated.
+[AuraDB](https://github.com/Ohswedd/auradb) remains the **native, high-performance backend**
+with the strongest path through the Aura Wire Protocol; the backend adapters make Aura useful
+immediately with infrastructure you already run. Feature differences between backends are
+represented honestly through [backend capabilities](docs/BACKEND_CAPABILITY_MATRIX.md) —
+unsupported features raise a structured error rather than being emulated.
 
 It is useful today with zero setup: the package ships an in-memory reference server and
 first-class SQLite support, so the examples and the full default test suite run with no
@@ -132,8 +132,8 @@ pure-Python core and optional native acceleration.
 
 It is **not** a database server. AuraDB server features (storage, distributed
 transactions, server-side cost-based planning, lock and impact estimation on a live
-cluster) live in a separate project and are not implemented or claimed here. See
-[AuraDB boundary](docs/AURADB_BOUNDARY.md).
+cluster) live in the separate [AuraDB](https://github.com/Ohswedd/auradb) project and
+are not implemented or claimed here. See [AuraDB boundary](docs/AURADB_BOUNDARY.md).
 
 ## Installation
 
@@ -396,6 +396,7 @@ pretending to succeed. See [AuraDB boundary](docs/AURADB_BOUNDARY.md).
 - [Observability](docs/OBSERVABILITY.md) and [Migrations](docs/MIGRATIONS.md)
 - [Errors](docs/ERRORS.md) and [Testing](docs/TESTING.md)
 - [Native Acceleration](docs/NATIVE_ACCELERATION.md) and [AuraDB Boundary](docs/AURADB_BOUNDARY.md)
+- [Roadmap](docs/ROADMAP.md)
 
 ## Benchmarks
 
