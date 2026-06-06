@@ -126,16 +126,71 @@ detection on commit; it is not serializable MVCC.
 
 ## Compatibility
 
-| Aura Connector | AuraDB   | Protocol | Status |
-| -------------- | -------- | -------- | ------ |
-| 0.3.x          | 0.2.x    | AWP 1    | Supported — native backend (`auradb://`, `auradbs://`), auth + TLS |
-| 0.2.x          | 0.2.x    | n/a      | Not supported — 0.2.x does not speak the authenticated, TLS-capable native AWP path |
+| Aura Connector | AuraDB     | Protocol | Status |
+| -------------- | ---------- | -------- | ------ |
+| 0.4.x          | 0.7.x      | AWP 1    | Supported — adds cluster-preview ergonomics (`AuraNotLeaderError`, leader redirect) |
+| 0.4.x          | 0.6.x      | AWP 1    | Supported — single-node; cluster ergonomics simply never trigger |
+| 0.3.x          | 0.2.x      | AWP 1    | Supported — native backend (`auradb://`, `auradbs://`), auth + TLS |
+| 0.2.x          | 0.2.x      | n/a      | Not supported — 0.2.x does not speak the authenticated, TLS-capable native AWP path |
 
 - **Aura Connector 0.3.x works with AuraDB 0.2.x** over AWP 1, including static-token
   authentication and server-verified TLS.
 - **Aura Connector 0.2.x does not** speak the new authenticated, TLS-capable native AWP path
   and cannot complete an AWP handshake with the AuraDB v0.2.0 network server. Upgrade to
   0.3.x to talk to AuraDB v0.2.0.
+
+## Cluster preview ergonomics (AuraDB multi-node)
+
+AuraDB's multi-node mode is an **experimental, opt-in preview**. There is no production
+high availability, no automatic failover, and no distributed transactions; single-node mode
+remains the recommended production deployment. In the preview, only the Raft **leader**
+accepts writes. A write sent to a follower is rejected with a structured `not_leader`
+response rather than being silently forwarded.
+
+The connector maps that response to a dedicated `AuraNotLeaderError` (see
+[`ERRORS.md`](ERRORS.md)) carrying the leader-routing hints the server provided —
+`leader_addr`, `leader_client_addr`, `leader_hint`, `leader_node_id`, `current_node_id`,
+`retryable`, and `raw_payload`. None of these helpers run unless you opt in, and the Aura
+Wire Protocol version is unchanged (the cluster fields are purely additive).
+
+### Reconnect to the leader (manual, explicit)
+
+```python
+from aura import AuraNotLeaderError, connect
+
+async with connect("auradbs://follower:7171/app", models=[Note], auth=token) as client:
+    try:
+        await client.insert(Note(id=1, body="hi"))
+    except AuraNotLeaderError as exc:
+        if exc.leader_addr is None:
+            raise  # no leader known yet — resolve via `auradb cluster leader`
+        # A new client bound to the leader; token auth and TLS are preserved.
+        leader = await client.connect_to_leader(exc)
+        try:
+            await leader.insert(Note(id=1, body="hi"))
+        finally:
+            await leader.close()
+```
+
+`Client.reconnect_to("host:port")` is the lower-level form when you already know the
+address. Both return a *new*, independent client (no shared transaction state) and inherit
+the original scheme, authentication, and TLS configuration unchanged — certificate
+verification is never silently weakened.
+
+### Bounded leader redirect (opt-in)
+
+```python
+leader = client.with_leader_redirect(max_redirects=1)
+await leader.insert(Note(id=2, body="auto-redirected"))
+```
+
+`with_leader_redirect` is **disabled by default**. The returned `LeaderRedirect` retries an
+operation against the current leader **only** on a `not_leader` response that carries a
+usable leader address, and never more than `max_redirects` times — there is no unbounded
+retry. This is safe because `not_leader` is a *pre-application* rejection: a follower refuses
+a write before it enters the Raft log, so retrying it on the leader cannot double-apply it.
+The helper reacts only to `not_leader`, never to ambiguous network or timeout errors. It
+refuses to wrap transactions or streaming cursors (see [`CLIENT.md`](CLIENT.md)).
 
 ## Supported operations
 

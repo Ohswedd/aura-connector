@@ -84,6 +84,38 @@ except Exception:
     raise
 ```
 
+## Cluster leader redirection (AuraDB multi-node preview)
+
+AuraDB's multi-node mode is experimental and opt-in; single-node mode remains the
+recommended production deployment. In the preview only the leader accepts writes, and a
+write to a follower raises `AuraNotLeaderError`. Two opt-in helpers handle this; neither
+runs unless you call it.
+
+- **`await client.connect_to_leader(error)`** / **`await client.reconnect_to("host:port")`**
+  open a *new* client bound to the leader. The new client inherits this client's scheme,
+  token authentication, and TLS settings unchanged (verification is never silently
+  weakened), and carries no transaction state. `connect_to_leader` raises
+  `AuraConnectionError` if the error has no usable leader address; both raise
+  `AuraBackendCapabilityError` for non-AuraDB backends.
+- **`client.with_leader_redirect(max_redirects=1)`** returns a `LeaderRedirect` wrapper whose
+  `insert` / `bulk_insert` / `upsert` / `raw` / `run(factory)` retry on the leader, bounded
+  by `max_redirects` (no unbounded retry). It redirects only on a `not_leader` response with
+  a usable leader address — safe because `not_leader` is a *pre-application* rejection, so
+  retrying the write on the leader cannot double-apply it.
+
+### Transaction- and stream-safe rules
+
+The leader redirect deliberately does **not** cover transactions or streaming cursors,
+because their server-side state lives on one node and cannot migrate:
+
+- A `not_leader` raised inside `client.transaction()` propagates; it is never auto-redirected.
+  Restart the whole transaction on the leader (via `connect_to_leader`), never migrate it.
+- `LeaderRedirect.transaction()` raises `AuraTransactionError`, and `LeaderRedirect.stream()`
+  raises `AuraBackendCapabilityError`, rather than silently doing the unsafe thing.
+- Server-side transaction ids are never moved across nodes.
+- Read-only operations can be resolved against the leader before execution by running them
+  through `LeaderRedirect.run(...)`, because `not_leader` is reported before any rows.
+
 ## Retries
 
 Requests are retried only when the raised error is classified retryable, and never more

@@ -92,6 +92,7 @@ def test_error_code_map_covers_every_typed_error() -> None:
         AuraAuthorizationError,
         AuraConstraintError,
         AuraNotFoundError,
+        AuraNotLeaderError,
         AuraProtocolError,
         AuraSchemaError,
         AuraServerError,
@@ -109,6 +110,7 @@ def test_error_code_map_covers_every_typed_error() -> None:
         "constraint_violation": AuraConstraintError,
         "authentication_error": AuraAuthenticationError,
         "authorization_error": AuraAuthorizationError,
+        "not_leader": AuraNotLeaderError,
         "protocol_error": AuraProtocolError,
         "server_error": AuraServerError,
     }

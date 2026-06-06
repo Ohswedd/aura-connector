@@ -13,7 +13,7 @@ from .backends import (
     BackendResult,
     resolve_backend,
 )
-from .client import Aura, Client, Transaction, connect
+from .client import Aura, Client, LeaderRedirect, Transaction, connect
 from .config import (
     ClientConfig,
     PasswordAuth,
@@ -38,6 +38,7 @@ from .errors import (
     AuraMigrationError,
     AuraNonRetryableTransactionError,
     AuraNotFoundError,
+    AuraNotLeaderError,
     AuraProtocolError,
     AuraProtocolVersionError,
     AuraQueryError,
@@ -79,6 +80,7 @@ __all__ = [
     # client
     "Aura",
     "Client",
+    "LeaderRedirect",
     "Transaction",
     "connect",
     # models / fields / vectors
@@ -144,6 +146,7 @@ __all__ = [
     "AuraAuthorizationError",
     "AuraServerError",
     "AuraNotFoundError",
+    "AuraNotLeaderError",
     "AuraConstraintError",
     "AuraConstraintViolation",
     "AuraSerializationError",
@@ -153,4 +156,4 @@ __all__ = [
     "RelationshipNotLoadedError",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

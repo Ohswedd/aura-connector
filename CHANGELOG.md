@@ -7,6 +7,46 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-06
+
+Coordinated release with AuraDB v0.7.0, focused on cluster-preview ergonomics. AuraDB's
+multi-node mode is experimental and opt-in; single-node mode remains the recommended
+production deployment. There is no production high availability, automatic failover, or
+distributed transactions. Non-cluster behavior is unchanged, and the Aura Wire Protocol
+version (AWP 1) is unchanged — the new fields are purely additive.
+
+### Added
+
+- Dedicated `AuraNotLeaderError` for AuraDB cluster-preview `not_leader` responses. It maps
+  from the server's `not_leader` error code and exposes the leader-routing hints the server
+  provided — `leader_addr`, `leader_client_addr`, `leader_hint`, `leader_node_id`,
+  `current_node_id`, `retryable`, and the full `raw_payload` — extracted from either the
+  top level of the payload or a nested `not_leader` object, and never raising on a missing
+  field. `str(error)` includes a usable leader address when known.
+- Safe manual reconnect helpers `Client.connect_to_leader(error)` and
+  `Client.reconnect_to(address)`: they open a new client bound to the leader, preserving the
+  original scheme, token authentication, and TLS settings, and carry no transaction state.
+- Optional, bounded leader-redirect helper `Client.with_leader_redirect(max_redirects=...)`
+  returning a `LeaderRedirect` wrapper. It is disabled by default and only ever redirects on
+  an explicit `not_leader` response that carries a usable leader address, never more than
+  `max_redirects` times. It refuses to wrap transactions or streaming cursors.
+- Cluster-aware examples `examples/auradb_cluster.py` and `examples/auradb_not_leader.py`.
+- Cluster conformance coverage against AuraDB v0.7.x in
+  `tests/integration/test_auradb_cluster_live.py`, gated on `AURADB_CLUSTER_LEADER_DSN` /
+  `AURADB_CLUSTER_FOLLOWER_DSN` (with optional `AURADB_CLUSTER_TOKEN` / `AURADB_CLUSTER_CA`).
+
+### Changed
+
+- Improved AuraDB cluster-preview error ergonomics while preserving existing non-cluster
+  behavior: known non-cluster error codes map exactly as before, and unknown codes still
+  fall back to `AuraServerError`.
+
+### Compatibility
+
+- Aura Connector 0.4.x works with AuraDB 0.7.x over AWP 1, and remains compatible with
+  AuraDB 0.6.x single-node servers (which never send `not_leader`). The cluster ergonomics
+  activate only when a server returns a `not_leader` response.
+
 ## [0.3.0] - 2026-06-04
 
 Coordinated release with AuraDB v0.2.0. This adds a native AuraDB backend that speaks the
