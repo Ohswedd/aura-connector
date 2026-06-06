@@ -228,11 +228,29 @@ class AuraNotLeaderError(AuraError):
         self.raw_payload: Mapping[str, Any] | None = raw_payload
 
     def __str__(self) -> str:
+        # A single, readable line that names the node reached, where the leader is
+        # (or that it is unknown), the retry classification, and how to redirect.
+        # It only ever prints node ids and a host:port leader address — never auth
+        # tokens, TLS material, or any other field that could carry a secret.
         parts = [f"[{self.code}] {self.message}"]
+        if self.current_node_id:
+            parts.append(f"(reached non-leader node {self.current_node_id})")
         if self.leader_addr:
             parts.append(f"(leader at {self.leader_addr})")
         elif self.leader_node_id:
             parts.append(f"(leader node {self.leader_node_id}, address unknown)")
+        else:
+            parts.append("(leader unknown)")
+        if self.leader_addr:
+            # A leader is reachable: redirecting is safe, but never automatic for
+            # writes — say so explicitly so callers do not assume a silent retry.
+            parts.append(
+                "(retry on the leader with Client.connect_to_leader(error) or "
+                f"reconnect_to({self.leader_addr!r}); writes are not retried automatically)"
+            )
+        else:
+            # No usable address: do not imply a retry is safe; point at leader discovery.
+            parts.append("(resolve the leader, e.g. `auradb cluster leader`, then reconnect)")
         if self.request_id is not None:
             parts.append(f"(request_id={self.request_id})")
         return " ".join(parts)

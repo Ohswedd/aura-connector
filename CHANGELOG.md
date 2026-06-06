@@ -7,6 +7,48 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-06
+
+Coordinated patch release with AuraDB v0.7.1, focused on cluster-preview connector
+ergonomics. No new database architecture, no breaking API changes, and the Aura Wire
+Protocol version (AWP 1) is unchanged. AuraDB's multi-node mode remains experimental and
+opt-in; single-node mode is the recommended production deployment. There is no production
+high availability, automatic failover, or distributed transactions.
+
+### Added
+
+- Clearer `AuraNotLeaderError` messages: `str(error)` now names the non-leader node reached,
+  the leader address (or that it is unknown), and how to redirect (`Client.connect_to_leader`
+  / `reconnect_to`), and is explicit that writes are never retried automatically. It still
+  renders only node ids and a `host:port` address — never auth tokens or TLS material.
+- Additional cluster redirect and reconnect examples, including a new
+  `examples/auradb_leader_redirect.py` covering leader discovery via `auradb cluster leader`,
+  explicit reconnect, and the bounded redirect helper.
+- TLS/auth redirect edge-case tests (`tests/unit/test_redirect_security.py`): auth and TLS are
+  preserved across a redirect, hostname verification is never silently disabled, a bare
+  `host:port` redirect inherits the original TLS, and a secure client refuses an explicit
+  plaintext redirect target by default.
+- Transaction redirect safety documentation (`docs/TRANSACTIONS.md`) and tests covering the
+  node-local transaction-id and restart-on-leader rules.
+- Connector ↔ AuraDB compatibility matrix (`docs/COMPATIBILITY.md`).
+- Cluster conformance hardening: explicitly-named live checks (`AURADB_CLUSTER_*`,
+  including an optional `AURADB_CLUSTER_SERVER_NAME`) in
+  `tests/integration/test_auradb_cluster_live.py`.
+
+### Changed
+
+- Improved leader redirect helper diagnostics without changing default behavior: redirect
+  addresses now reject unknown DSN schemes, and a TLS client fails closed on an explicit
+  insecure redirect target (override with `allow_insecure=True`).
+- Improved AuraDB cluster-preview docs (`AURADB.md`, `CLIENT.md`, `TESTING.md`, `README.md`)
+  and the streaming-redirect rejection message (it now points at re-issuing the query on the
+  leader).
+
+### Fixed
+
+- Corrected a static-type annotation on the native backend's server-error map so the
+  `not_leader` mapping path type-checks cleanly under `mypy` (no behavior change).
+
 ## [0.4.0] - 2026-06-06
 
 Coordinated release with AuraDB v0.7.0, focused on cluster-preview ergonomics. AuraDB's

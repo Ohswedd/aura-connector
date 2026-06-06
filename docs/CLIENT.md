@@ -96,7 +96,10 @@ runs unless you call it.
   token authentication, and TLS settings unchanged (verification is never silently
   weakened), and carries no transaction state. `connect_to_leader` raises
   `AuraConnectionError` if the error has no usable leader address; both raise
-  `AuraBackendCapabilityError` for non-AuraDB backends.
+  `AuraBackendCapabilityError` for non-AuraDB backends. A redirect that would silently drop
+  TLS — an explicit plaintext address (e.g. `auradb://leader:7171`) while the client is on a
+  TLS scheme — is refused unless you pass `allow_insecure=True`, and an unknown DSN scheme in
+  the address is rejected outright.
 - **`client.with_leader_redirect(max_redirects=1)`** returns a `LeaderRedirect` wrapper whose
   `insert` / `bulk_insert` / `upsert` / `raw` / `run(factory)` retry on the leader, bounded
   by `max_redirects` (no unbounded retry). It redirects only on a `not_leader` response with

@@ -54,21 +54,38 @@ _MUTATION_OPS = frozenset({"insert", "update", "delete", "upsert"})
 _MAX_LEADER_REDIRECTS = 10
 
 
-def _split_address(address: str) -> tuple[str, int]:
-    """Parse a ``host:port`` leader address into its parts.
+#: DSN schemes the redirect helpers accept in an explicit leader address. These
+#: mirror the wire-protocol schemes :mod:`aura.config` understands; a redirect
+#: target that names any other scheme is rejected rather than silently parsed.
+_SECURE_REDIRECT_SCHEMES = frozenset({"auras", "auradbs"})
+_INSECURE_REDIRECT_SCHEMES = frozenset({"aura", "aura+tcp", "auradb", "aura+memory", "memory"})
+_KNOWN_REDIRECT_SCHEMES = _SECURE_REDIRECT_SCHEMES | _INSECURE_REDIRECT_SCHEMES
 
-    Accepts bare ``host:port`` as well as a full ``auradb://host:port`` URL.
-    Raises :class:`AuraNotLeaderError`-friendly :class:`AuraConnectionError` for a
-    missing or malformed address so a caller redirecting to a leader gets a clear,
-    actionable failure rather than a generic parse error.
+
+def _split_address(address: str) -> tuple[str, int, str | None]:
+    """Parse a leader address into ``(host, port, scheme)``.
+
+    Accepts a bare ``host:port`` as well as a full ``auradb://host:port`` URL. The
+    returned ``scheme`` is the explicit scheme when the address carried one (so a
+    caller can enforce a secure-redirect policy) and ``None`` for a bare address.
+    Raises a clear :class:`AuraConnectionError` for a missing, malformed, or
+    unknown-scheme address so a caller redirecting to a leader gets an actionable
+    failure rather than a generic parse error or a silently mis-parsed target.
     """
     if not isinstance(address, str) or not address.strip():
         raise AuraConnectionError("a concrete leader address is required to reconnect")
     text = address.strip()
+    scheme: str | None = None
     if "://" in text:
         from urllib.parse import urlsplit
 
         parts = urlsplit(text)
+        scheme = (parts.scheme or "").lower() or None
+        if scheme is not None and scheme not in _KNOWN_REDIRECT_SCHEMES:
+            raise AuraConnectionError(
+                f"leader address {address!r} uses unsupported scheme {scheme!r}; "
+                f"expected one of {sorted(_KNOWN_REDIRECT_SCHEMES)} or a bare host:port"
+            )
         host, port = parts.hostname, parts.port
     elif text.startswith("[") and "]" in text:  # bracketed IPv6, optional :port
         host_part, _, port_part = text.rpartition("]")
@@ -84,7 +101,7 @@ def _split_address(address: str) -> tuple[str, int]:
             raise AuraConnectionError(f"leader address {address!r} has a non-numeric port") from exc
     if not host or port is None:
         raise AuraConnectionError(f"leader address {address!r} must be in 'host:port' form")
-    return host, int(port)
+    return host, int(port), scheme
 
 
 def _field_name(key: Any) -> str:
@@ -376,11 +393,39 @@ class Client:
             return address
         return target
 
+    def _resolve_redirect_target(self, address: str, *, allow_insecure: bool) -> tuple[str, int]:
+        """Validate a redirect ``address`` against this client's security posture.
+
+        Returns the ``(host, port)`` to redirect to. The new connection always
+        inherits this client's scheme, TLS, and auth (only host/port change), so a
+        secure client stays secure. The one thing we refuse is an *explicit*
+        downgrade: if this client is on a TLS scheme and the address names a
+        plaintext scheme (e.g. ``auradb://``), redirecting would be a silent
+        security downgrade, so we fail closed unless ``allow_insecure`` is set.
+        """
+        host, port, scheme = _split_address(address)
+        current_secure = self._config.scheme in _SECURE_REDIRECT_SCHEMES or self._config.tls.enabled
+        if (
+            not allow_insecure
+            and current_secure
+            and scheme is not None
+            and scheme in _INSECURE_REDIRECT_SCHEMES
+        ):
+            raise AuraConnectionError(
+                f"refusing to redirect a secure client (scheme {self._config.scheme!r}, "
+                f"TLS enabled) to insecure leader address {address!r}; this would silently "
+                "drop TLS. Pass a secure or bare host:port address, or set allow_insecure=True "
+                "to override deliberately.",
+                context={"from_scheme": self._config.scheme, "to_scheme": scheme},
+            )
+        return host, port
+
     async def connect_to_leader(
         self,
         error: AuraNotLeaderError,
         *,
         models: Iterable[type[AuraModel]] | None = None,
+        allow_insecure: bool = False,
     ) -> Client:
         """Open a **new** client connected to the leader named by ``error``.
 
@@ -392,26 +437,32 @@ class Client:
         client carries no transaction state from it.
 
         Raises :class:`~aura.AuraConnectionError` when ``error`` carries no usable
-        leader address, and :class:`~aura.AuraBackendCapabilityError` for non-AuraDB
-        backends.
+        leader address or when redirecting would silently drop TLS (pass
+        ``allow_insecure=True`` to override), and
+        :class:`~aura.AuraBackendCapabilityError` for non-AuraDB backends.
         """
-        return await self.reconnect_to(self._leader_address_from(error), models=models)
+        return await self.reconnect_to(
+            self._leader_address_from(error), models=models, allow_insecure=allow_insecure
+        )
 
     async def reconnect_to(
         self,
         address: str,
         *,
         models: Iterable[type[AuraModel]] | None = None,
+        allow_insecure: bool = False,
     ) -> Client:
         """Open a new client to ``address`` (``host:port``), preserving auth/TLS.
 
-        A concrete address is required; an empty or malformed address raises
-        :class:`~aura.AuraConnectionError`. The returned client is independent of
-        this one (separate connection, no shared transaction state) and registers
-        the same models by default so it is immediately usable.
+        A concrete address is required; an empty, malformed, or unknown-scheme
+        address raises :class:`~aura.AuraConnectionError`, as does an explicit
+        insecure address when this client is secure (unless ``allow_insecure=True``).
+        The returned client is independent of this one (separate connection, no
+        shared transaction state) and registers the same models by default so it is
+        immediately usable.
         """
         self._require_protocol_backend()
-        host, port = _split_address(address)
+        host, port = self._resolve_redirect_target(address, allow_insecure=allow_insecure)
         new_config = self._config.with_overrides(host=host, port=port)
         registered = tuple(self._registry.values()) if models is None else tuple(models)
         return await self._open_sibling(new_config, registered)
@@ -441,9 +492,12 @@ class Client:
         one is opened against the leader with the same authentication and TLS
         settings. Registered models are re-declared so the client stays usable.
         Transactions are not migrated; callers must not use this mid-transaction.
+        A redirect that would silently drop TLS is refused (see
+        :meth:`_resolve_redirect_target`); the leader address from a ``not_leader``
+        response is a bare ``host:port`` and inherits this client's TLS unchanged.
         """
         self._require_protocol_backend()
-        host, port = _split_address(address)
+        host, port = self._resolve_redirect_target(address, allow_insecure=False)
         new_config = self._config.with_overrides(host=host, port=port)
         new_backend = self._build_backend(new_config)
         old_backend = self._backend
@@ -811,7 +865,9 @@ class LeaderRedirect:
     def stream(self, *args: Any, **kwargs: Any) -> Any:
         raise AuraBackendCapabilityError(
             "leader redirect cannot wrap a streaming cursor: an open cursor's state lives on "
-            "one node and cannot be redirected mid-stream"
+            "one node and cannot be redirected mid-stream. Resolve the leader first (catch "
+            "AuraNotLeaderError or use Client.connect_to_leader), then start a new query/stream "
+            "against the leader."
         )
 
 

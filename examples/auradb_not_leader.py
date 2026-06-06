@@ -23,6 +23,9 @@ Transactions are **not** auto-redirected: a transaction's server-side state live
 on one node. On ``not_leader`` inside a transaction, restart the whole transaction
 on the leader (open a new client with ``connect_to_leader``), never migrate it.
 
+See also ``examples/auradb_leader_redirect.py`` for leader discovery via the
+``auradb cluster leader`` CLI and the bounded redirect helper.
+
 Run: ``python examples/auradb_not_leader.py``
 """
 

@@ -21,6 +21,10 @@ anywhere. Point it at a real preview cluster by exporting::
     export AURADB_CLUSTER_TOKEN=...            # static auth token, if enabled
     export AURADB_CLUSTER_CA=/path/to/ca.pem   # CA bundle for auradbs:// TLS
 
+See also ``examples/auradb_leader_redirect.py``, which focuses on leader discovery
+(``auradb cluster leader``), the enriched ``AuraNotLeaderError`` guidance, and the
+secure-by-default redirect (TLS is never silently dropped).
+
 Run: ``python examples/auradb_cluster.py``
 """
 

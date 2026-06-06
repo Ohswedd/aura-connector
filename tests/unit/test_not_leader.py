@@ -160,3 +160,64 @@ def test_not_leader_raw_payload_preserved() -> None:
 def test_non_cluster_codes_never_become_not_leader(code: str) -> None:
     err = _native({"code": code, "message": "x"})
     assert not isinstance(err, AuraNotLeaderError)
+
+
+# --------------------------------------------------------------------------- #
+# A2 — AuraNotLeaderError.__str__ guidance                                    #
+# --------------------------------------------------------------------------- #
+def test_not_leader_str_with_leader_addr() -> None:
+    err = _native(
+        {
+            "code": "not_leader",
+            "message": "this node is not the leader",
+            "retryable": True,
+            "not_leader": {
+                "leader_client_addr": "10.0.0.2:7171",
+                "leader_node_id": "00000000000000aa",
+                "current_node_id": "0000000000000001",
+            },
+        }
+    )
+    text = str(err)
+    # Names the node reached, the leader address, and how to redirect.
+    assert "not_leader" in text
+    assert "0000000000000001" in text  # current (non-leader) node
+    assert "10.0.0.2:7171" in text  # leader address
+    assert "connect_to_leader" in text  # actionable redirect hint
+    # Never implies an automatic write retry.
+    assert "not retried automatically" in text
+
+
+def test_not_leader_str_without_leader_addr() -> None:
+    err = _native({"code": "not_leader", "message": "no leader yet", "retryable": True})
+    text = str(err)
+    assert "not_leader" in text
+    assert "leader unknown" in text
+    # With no usable address, point at out-of-band leader discovery, not a retry.
+    assert "auradb cluster leader" in text
+    assert "connect_to_leader" not in text
+
+
+def test_not_leader_str_no_secrets() -> None:
+    # Even if a token-like value somehow rode along in the payload context, it must
+    # never appear in the user-facing string (str only renders ids and host:port).
+    err = AuraNotLeaderError(
+        "not the leader",
+        leader_addr="10.0.0.5:7171",
+        current_node_id="0000000000000001",
+        context={"authorization": "Bearer super-secret-token", "token": "super-secret-token"},
+        request_id=11,
+    )
+    text = str(err)
+    assert "super-secret-token" not in text
+    assert "Bearer" not in text
+    assert "10.0.0.5:7171" in text  # the safe routing hint is still present
+
+
+def test_not_leader_retryable_false_message() -> None:
+    # retryable=False without a leader address must not imply a safe automatic retry.
+    err = _native({"code": "not_leader", "message": "stepping down", "retryable": False})
+    assert err.retryable is False
+    text = str(err)
+    assert "not retried automatically" not in text or err.leader_addr is None
+    assert "leader unknown" in text

@@ -177,6 +177,13 @@ address. Both return a *new*, independent client (no shared transaction state) a
 the original scheme, authentication, and TLS configuration unchanged — certificate
 verification is never silently weakened.
 
+**Secure by default.** A leader hint from a `not_leader` response is a bare `host:port`, so a
+redirect keeps the original client's TLS and auth. If you pass an *explicit* plaintext
+address (for example `auradb://leader:7171`) while the client is on a TLS scheme, the
+redirect is **refused** rather than silently dropping TLS; pass `allow_insecure=True` to
+`connect_to_leader` / `reconnect_to` to override deliberately. An unknown DSN scheme in a
+redirect address is rejected outright.
+
 ### Bounded leader redirect (opt-in)
 
 ```python
@@ -204,3 +211,7 @@ silently emulated.
 - [BACKENDS.md](BACKENDS.md) — the backend model and DSN routing.
 - [PROTOCOL.md](PROTOCOL.md) — the wire protocol.
 - [ERRORS.md](ERRORS.md) — the typed error hierarchy.
+- [CLIENT.md](CLIENT.md) — the reconnect and bounded-redirect helpers in detail.
+- [TRANSACTIONS.md](TRANSACTIONS.md) — transaction semantics and cluster-preview rules.
+- [COMPATIBILITY.md](COMPATIBILITY.md) — connector ↔ AuraDB ↔ protocol matrix.
+- `examples/auradb_leader_redirect.py` — leader discovery and safe redirect, runnable.

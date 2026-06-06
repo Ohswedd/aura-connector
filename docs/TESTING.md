@@ -65,16 +65,24 @@ AuraDB server when `AURADB_TEST_ADDR` is set (optionally `AURADB_TEST_TOKEN`,
 
 `tests/integration/test_auradb_cluster_live.py` is the cluster-preview conformance suite. It
 skips unless both leader and follower DSNs are configured, and verifies the leader smoke
-path, the follower `not_leader` error and its leader address, `connect_to_leader`, the bounded
-redirect helper, and that transactions are never auto-redirected:
+path, the follower `not_leader` error message (including that it carries a leader address and
+leaks no token), `connect_to_leader`, the bounded redirect helper, that auth/TLS are
+preserved across a redirect, and that transactions are never auto-redirected:
 
 ```bash
 export AURADB_CLUSTER_LEADER_DSN=auradbs://leader:7171/itest
 export AURADB_CLUSTER_FOLLOWER_DSN=auradbs://follower:7171/itest
-export AURADB_CLUSTER_TOKEN=...            # if the cluster requires auth
-export AURADB_CLUSTER_CA=/path/to/ca.pem   # for auradbs:// TLS
+export AURADB_CLUSTER_TOKEN=...                 # if the cluster requires auth
+export AURADB_CLUSTER_CA=/path/to/ca.pem        # for auradbs:// TLS
+export AURADB_CLUSTER_SERVER_NAME=leader        # optional: asserted == DSN host (SNI)
 python -m pytest tests/integration/test_auradb_cluster_live.py -vv
 ```
+
+The connector derives the TLS server name (SNI / hostname verification) from the DSN host;
+there is no separate server-name knob, so set the DSN host to the certificate name. The
+offline equivalents — error-message guidance, TLS/auth preservation, the secure-by-default
+redirect, and transaction/stream safety — run everywhere in `tests/unit/test_not_leader.py`
+and `tests/unit/test_redirect_security.py`.
 
 The multi-node mode under test is experimental and opt-in; this is preview conformance, not
 a production high-availability claim.

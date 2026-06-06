@@ -23,6 +23,7 @@ from ..errors import (
     AuraBackendCapabilityError,
     AuraConnectionError,
     AuraConstraintError,
+    AuraError,
     AuraNotFoundError,
     AuraNotLeaderError,
     AuraProtocolError,
@@ -49,7 +50,7 @@ if TYPE_CHECKING:
 __all__ = ["AuraDBNativeBackend"]
 
 # Server ErrorCode (snake_case) to connector exception class.
-_SERVER_ERROR_MAP = {
+_SERVER_ERROR_MAP: dict[str, type[AuraError]] = {
     "unauthenticated": AuraAuthenticationError,
     "invalid_credentials": AuraAuthenticationError,
     "not_found": AuraNotFoundError,
