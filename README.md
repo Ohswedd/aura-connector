@@ -238,10 +238,13 @@ See [docs/AURADB.md](docs/AURADB.md).
 **Cluster preview (experimental, opt-in):** AuraDB's multi-node mode has no production high
 availability or automatic failover — single-node mode is the recommended production
 deployment. When only the leader accepts writes, a write to a follower raises
-`AuraNotLeaderError` carrying the leader address. Catch it and call
-`client.connect_to_leader(exc)`, or opt in to a bounded `client.with_leader_redirect()`. See
-[docs/AURADB.md](docs/AURADB.md) and the [`auradb_cluster`](examples/auradb_cluster.py) /
-[`auradb_not_leader`](examples/auradb_not_leader.py) examples.
+`AuraNotLeaderError` carrying the leader address and redirect guidance. Catch it and call
+`client.connect_to_leader(exc)`, or opt in to a bounded `client.with_leader_redirect()`. A
+redirect preserves auth and TLS and refuses to silently drop TLS. See
+[docs/AURADB.md](docs/AURADB.md), [docs/TRANSACTIONS.md](docs/TRANSACTIONS.md), and the
+[`auradb_cluster`](examples/auradb_cluster.py) /
+[`auradb_not_leader`](examples/auradb_not_leader.py) /
+[`auradb_leader_redirect`](examples/auradb_leader_redirect.py) examples.
 
 ## Quick start
 
