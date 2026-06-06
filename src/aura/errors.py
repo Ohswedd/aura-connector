@@ -9,6 +9,7 @@ never values.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "AuraMigrationError",
     "AuraNonRetryableTransactionError",
     "AuraNotFoundError",
+    "AuraNotLeaderError",
     "AuraProtocolError",
     "AuraProtocolVersionError",
     "AuraQueryError",
@@ -164,6 +166,122 @@ class AuraServerError(AuraError):
     def __init__(self, message: str, **kwargs: Any) -> None:
         kwargs.setdefault("retryable", True)
         super().__init__(message, **kwargs)
+
+
+class AuraNotLeaderError(AuraError):
+    """Raised when a write reaches an AuraDB node that is not the cluster leader.
+
+    AuraDB's multi-node mode is an experimental, opt-in preview: only the Raft
+    leader accepts writes, and a write sent to a follower is rejected with a
+    ``not_leader`` response rather than being silently forwarded. The connector
+    maps that response to this dedicated exception so applications can catch it
+    specifically — distinct from a generic :class:`AuraServerError` — and decide
+    how to react.
+
+    The error surfaces every leader-routing hint the server provided so a caller
+    can redirect without parsing the human message:
+
+    * :attr:`leader_addr` — the best usable client-facing address of the current
+      leader, when known. Pass this to
+      :meth:`aura.Client.connect_to_leader` / :meth:`aura.Client.reconnect_to`.
+    * :attr:`leader_client_addr` — the leader's declared client address as the
+      server reported it (``leader_addr`` falls back to this).
+    * :attr:`leader_hint` — a free-form leader hint string when one is provided.
+    * :attr:`leader_node_id` — the recognized leader's node id, when known.
+    * :attr:`current_node_id` — the id of the (non-leader) node that was reached.
+    * :attr:`retryable` — whether the operation may succeed if retried against the
+      leader. ``True`` when a leader is known. A ``True`` flag does **not** mean
+      the connector retries writes automatically: redirecting a write is only safe
+      when the caller knows the request was not already applied, so redirection is
+      always explicit (see :meth:`aura.Client.connect_to_leader` and
+      :meth:`aura.Client.with_leader_redirect`).
+    * :attr:`raw_payload` — the full structured server payload, for diagnostics.
+
+    Any field is ``None`` when the server did not provide it (for example a
+    follower that does not yet know who the leader is). The class never raises on
+    missing fields.
+    """
+
+    default_code = "not_leader"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        leader_hint: str | None = None,
+        leader_addr: str | None = None,
+        leader_client_addr: str | None = None,
+        leader_node_id: str | None = None,
+        current_node_id: str | None = None,
+        raw_payload: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        kwargs.setdefault("retryable", True)
+        super().__init__(message, **kwargs)
+        self.leader_client_addr = leader_client_addr
+        # ``leader_addr`` is the canonical usable address for a redirect: prefer an
+        # explicit ``leader_addr``, then the declared client address, then a hint.
+        self.leader_addr = leader_addr or leader_client_addr or leader_hint
+        self.leader_hint = leader_hint or self.leader_addr
+        self.leader_node_id = leader_node_id
+        self.current_node_id = current_node_id
+        self.raw_payload: Mapping[str, Any] | None = raw_payload
+
+    def __str__(self) -> str:
+        parts = [f"[{self.code}] {self.message}"]
+        if self.leader_addr:
+            parts.append(f"(leader at {self.leader_addr})")
+        elif self.leader_node_id:
+            parts.append(f"(leader node {self.leader_node_id}, address unknown)")
+        if self.request_id is not None:
+            parts.append(f"(request_id={self.request_id})")
+        return " ".join(parts)
+
+    @classmethod
+    def from_server_payload(
+        cls,
+        message: str,
+        *,
+        code: str | None = None,
+        retryable: bool | None = None,
+        request_id: int | None = None,
+        payload: Mapping[str, Any] | None = None,
+    ) -> AuraNotLeaderError:
+        """Build a :class:`AuraNotLeaderError` from a decoded server error payload.
+
+        Extracts the leader hint from every field AuraDB may send, whether at the
+        top level of the payload or nested under a ``not_leader`` object, and never
+        crashes when a field is absent. ``payload`` is any mapping (the wire error
+        payload, or a connector ``context`` dict).
+        """
+        data: dict[str, Any] = dict(payload or {})
+        nested = data.get("not_leader")
+        nested_map: dict[str, Any] = dict(nested) if isinstance(nested, Mapping) else {}
+
+        def pick(*names: str) -> str | None:
+            for source in (nested_map, data):
+                for name in names:
+                    value = source.get(name)
+                    if value:
+                        return str(value)
+            return None
+
+        if retryable is None:
+            flag = data.get("retryable")
+            retryable = bool(flag) if flag is not None else None
+        return cls(
+            message,
+            code=code,
+            retryable=retryable if retryable is not None else True,
+            request_id=request_id,
+            context=dict(data),
+            leader_client_addr=pick("leader_client_addr"),
+            leader_addr=pick("leader_addr", "leader_client_addr"),
+            leader_hint=pick("leader_hint"),
+            leader_node_id=pick("leader_node_id", "leader_id"),
+            current_node_id=pick("current_node_id"),
+            raw_payload=dict(data) or None,
+        )
 
 
 class AuraNotFoundError(AuraError):

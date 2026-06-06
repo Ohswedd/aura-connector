@@ -9,9 +9,9 @@ network IO at import time or in ``__init__`` — only ``connect``/``close``/requ
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from types import TracebackType
-from typing import Any
+from typing import Any, TypeVar
 
 from .backends.auradb import _ERROR_CODE_MAP as _ERROR_CODE_MAP  # re-exported for compatibility
 from .backends.auradb import ProtocolBackend, error_from_frame
@@ -21,9 +21,11 @@ from .errors import (
     AuraBackendCapabilityError,
     AuraClientClosedError,
     AuraConnectionError,
+    AuraNotLeaderError,
     AuraQueryError,
     AuraSchemaError,
     AuraServerError,
+    AuraTransactionError,
 )
 from .hydration.hydrator import Hydrator
 from .models import AuraModel, get_model
@@ -41,9 +43,48 @@ from .query.builder import (
 from .query.expressions import FieldReference
 from .transport.base import Transport
 
-__all__ = ["Aura", "Client", "Transaction", "connect"]
+__all__ = ["Aura", "Client", "LeaderRedirect", "Transaction", "connect"]
+
+_T = TypeVar("_T")
 
 _MUTATION_OPS = frozenset({"insert", "update", "delete", "upsert"})
+
+#: Hard ceiling on leader redirects per operation, so an opt-in redirect helper can
+#: never become an unbounded retry loop even if misconfigured.
+_MAX_LEADER_REDIRECTS = 10
+
+
+def _split_address(address: str) -> tuple[str, int]:
+    """Parse a ``host:port`` leader address into its parts.
+
+    Accepts bare ``host:port`` as well as a full ``auradb://host:port`` URL.
+    Raises :class:`AuraNotLeaderError`-friendly :class:`AuraConnectionError` for a
+    missing or malformed address so a caller redirecting to a leader gets a clear,
+    actionable failure rather than a generic parse error.
+    """
+    if not isinstance(address, str) or not address.strip():
+        raise AuraConnectionError("a concrete leader address is required to reconnect")
+    text = address.strip()
+    if "://" in text:
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(text)
+        host, port = parts.hostname, parts.port
+    elif text.startswith("[") and "]" in text:  # bracketed IPv6, optional :port
+        host_part, _, port_part = text.rpartition("]")
+        host = host_part.lstrip("[")
+        port = int(port_part.lstrip(":")) if port_part.startswith(":") else None
+    else:
+        host, _, port_text = text.rpartition(":")
+        if not host:  # no colon present
+            raise AuraConnectionError(f"leader address {address!r} must be in 'host:port' form")
+        try:
+            port = int(port_text)
+        except ValueError as exc:
+            raise AuraConnectionError(f"leader address {address!r} has a non-numeric port") from exc
+    if not host or port is None:
+        raise AuraConnectionError(f"leader address {address!r} must be in 'host:port' form")
+    return host, int(port)
 
 
 def _field_name(key: Any) -> str:
@@ -305,6 +346,148 @@ class Client:
         self._tx_counter += 1
         return Transaction(self, self._tx_counter, isolation)
 
+    # -- cluster leader redirection (AuraDB multi-node preview) ------------------
+    def _require_protocol_backend(self) -> None:
+        """Reject leader redirection for backends that have no wire transport.
+
+        AuraDB's cluster preview only applies to the Aura Wire Protocol backends.
+        Database adapters (SQLite, PostgreSQL, …) have a single endpoint and no
+        notion of a leader, so redirect helpers refuse rather than silently no-op.
+        """
+        from .backends.registry import _PROTOCOL_FAMILIES, SCHEME_FAMILY
+
+        if SCHEME_FAMILY.get(self._config.scheme) not in _PROTOCOL_FAMILIES:
+            raise AuraBackendCapabilityError(
+                f"Backend {self._backend.name!r} (scheme {self._config.scheme!r}) is not an "
+                "AuraDB wire-protocol backend and has no cluster leader to redirect to",
+                context={"backend": self._backend.name, "scheme": self._config.scheme},
+            )
+
+    @staticmethod
+    def _leader_address_from(target: AuraNotLeaderError | str) -> str:
+        if isinstance(target, AuraNotLeaderError):
+            address = target.leader_addr
+            if not address:
+                raise AuraConnectionError(
+                    "not_leader response did not include a usable leader address; "
+                    "resolve the leader (e.g. `auradb cluster leader`) and reconnect explicitly",
+                    context={"code": target.code},
+                )
+            return address
+        return target
+
+    async def connect_to_leader(
+        self,
+        error: AuraNotLeaderError,
+        *,
+        models: Iterable[type[AuraModel]] | None = None,
+    ) -> Client:
+        """Open a **new** client connected to the leader named by ``error``.
+
+        Catch :class:`~aura.AuraNotLeaderError` from a write against a follower and
+        call this to obtain a fresh client bound to the current leader. The new
+        client inherits this client's scheme, authentication, and TLS configuration
+        unchanged — a token stays a token, certificate verification stays on — only
+        the host and port change. This client is left untouched and usable; the new
+        client carries no transaction state from it.
+
+        Raises :class:`~aura.AuraConnectionError` when ``error`` carries no usable
+        leader address, and :class:`~aura.AuraBackendCapabilityError` for non-AuraDB
+        backends.
+        """
+        return await self.reconnect_to(self._leader_address_from(error), models=models)
+
+    async def reconnect_to(
+        self,
+        address: str,
+        *,
+        models: Iterable[type[AuraModel]] | None = None,
+    ) -> Client:
+        """Open a new client to ``address`` (``host:port``), preserving auth/TLS.
+
+        A concrete address is required; an empty or malformed address raises
+        :class:`~aura.AuraConnectionError`. The returned client is independent of
+        this one (separate connection, no shared transaction state) and registers
+        the same models by default so it is immediately usable.
+        """
+        self._require_protocol_backend()
+        host, port = _split_address(address)
+        new_config = self._config.with_overrides(host=host, port=port)
+        registered = tuple(self._registry.values()) if models is None else tuple(models)
+        return await self._open_sibling(new_config, registered)
+
+    async def _open_sibling(
+        self, config: ClientConfig, models: tuple[type[AuraModel], ...]
+    ) -> Client:
+        from .backends.registry import backend_from_config
+
+        metrics = Metrics()
+        telemetry = _TelemetryBridge(TelemetryConfig.from_value(None))
+        backend = backend_from_config(config, metrics=metrics, telemetry=telemetry)
+        client = type(self)(
+            config,
+            backend=backend,
+            models=models,
+            metrics=metrics,
+            telemetry_bridge=telemetry,
+        )
+        await client._open()
+        return client
+
+    async def _reconnect_backend_to(self, address: str) -> None:
+        """Re-point **this** client's backend at ``address`` in place, preserving config.
+
+        Used by :meth:`with_leader_redirect`. The old backend is closed and a new
+        one is opened against the leader with the same authentication and TLS
+        settings. Registered models are re-declared so the client stays usable.
+        Transactions are not migrated; callers must not use this mid-transaction.
+        """
+        self._require_protocol_backend()
+        host, port = _split_address(address)
+        new_config = self._config.with_overrides(host=host, port=port)
+        new_backend = self._build_backend(new_config)
+        old_backend = self._backend
+        self._backend = new_backend
+        self._config = new_config
+        try:
+            await new_backend.connect()
+            if self._registry:
+                await new_backend.create_schema(self._registry.values())
+        finally:
+            await old_backend.close()
+
+    def _build_backend(self, config: ClientConfig) -> Backend:
+        """Construct a protocol backend for ``config`` (override point for tests)."""
+        from .backends.registry import backend_from_config
+
+        return backend_from_config(config, metrics=self._metrics, telemetry=self._telemetry)
+
+    def with_leader_redirect(self, *, max_redirects: int = 1) -> LeaderRedirect:
+        """Return an **opt-in** wrapper that redirects writes to the cluster leader.
+
+        Disabled by default: plain client calls never redirect. The wrapper retries
+        an operation against the current leader **only** when the server returns a
+        ``not_leader`` response that carries a usable leader address, and never more
+        than ``max_redirects`` times — there is no unbounded retry. ::
+
+            leader = client.with_leader_redirect(max_redirects=1)
+            await leader.insert(Widget(id=1, name="a"))
+
+        This is safe specifically because ``not_leader`` is a *pre-application*
+        rejection: a follower refuses a write before it enters the Raft log, so
+        retrying the same write on the leader cannot double-apply it. The wrapper
+        only ever reacts to ``not_leader`` — never to ambiguous network or timeout
+        errors, where a write may or may not have landed.
+
+        Transactions and streaming cursors are **not** redirected: their server-side
+        state lives on the original node and cannot migrate. Use the wrapper for
+        autonomous writes; restart a transaction or a stream against the leader
+        yourself (see :meth:`connect_to_leader`).
+        """
+        self._ensure_open()
+        self._require_protocol_backend()
+        return LeaderRedirect(self, max_redirects)
+
     # -- dynamic model access ----------------------------------------------------
     def __getattr__(self, name: str) -> QueryBuilder:
         # Only called for attributes not found normally; resolve registered models.
@@ -535,6 +718,101 @@ class Transaction:
             await self.rollback()
         else:
             await self.commit()
+
+
+class LeaderRedirect:
+    """Opt-in, bounded leader-redirect wrapper around a :class:`Client`.
+
+    Returned by :meth:`Client.with_leader_redirect`. It exposes the client's
+    autonomous write entry points; each call runs against the current node and, if
+    the server responds ``not_leader`` with a usable leader address, re-points the
+    client at the leader and retries — at most ``max_redirects`` times. Reads run
+    through :meth:`run` the same way. Transactions and streaming are intentionally
+    not offered here, because their server-side state cannot follow a redirect.
+    """
+
+    __slots__ = ("_client", "_max_redirects")
+
+    def __init__(self, client: Client, max_redirects: int) -> None:
+        if not isinstance(max_redirects, int) or isinstance(max_redirects, bool):
+            raise AuraQueryError("max_redirects must be an integer")
+        if max_redirects < 0:
+            raise AuraQueryError("max_redirects must be >= 0")
+        if max_redirects > _MAX_LEADER_REDIRECTS:
+            raise AuraQueryError(
+                f"max_redirects must be <= {_MAX_LEADER_REDIRECTS} (bounded redirects only)"
+            )
+        self._client = client
+        self._max_redirects = max_redirects
+
+    @property
+    def max_redirects(self) -> int:
+        return self._max_redirects
+
+    @property
+    def client(self) -> Client:
+        return self._client
+
+    async def run(self, operation: Callable[[], Awaitable[_T]]) -> _T:
+        """Run a zero-argument coroutine factory, redirecting on ``not_leader``.
+
+        ``operation`` must be re-invocable (a ``lambda`` or ``functools.partial``
+        producing a fresh awaitable each call), because a redirect re-runs it on the
+        leader. Only ``not_leader`` responses trigger a redirect, and only while a
+        usable leader address is supplied and the bounded budget remains; every
+        other error propagates unchanged.
+        """
+        redirects_left = self._max_redirects
+        while True:
+            try:
+                return await operation()
+            except AuraNotLeaderError as exc:
+                address = exc.leader_addr
+                if address is None or redirects_left <= 0:
+                    raise
+                redirects_left -= 1
+                self._client.metrics.record_error("not_leader_redirect")
+                await self._client._reconnect_backend_to(address)
+
+    async def insert(self, instance: AuraModel, *, on_conflict: str | None = None) -> AuraModel:
+        return await self.run(lambda: self._client.insert(instance, on_conflict=on_conflict))
+
+    async def bulk_insert(
+        self,
+        model: type[AuraModel],
+        rows: Sequence[AuraModel | dict[str, Any]],
+        *,
+        batch_size: int = 1000,
+        on_conflict: str | None = None,
+    ) -> int:
+        return await self.run(
+            lambda: self._client.bulk_insert(
+                model, rows, batch_size=batch_size, on_conflict=on_conflict
+            )
+        )
+
+    async def upsert(
+        self, model: type[AuraModel], *, key: dict[Any, Any], values: dict[Any, Any]
+    ) -> AuraModel:
+        return await self.run(lambda: self._client.upsert(model, key=key, values=values))
+
+    async def raw(
+        self, statement: str, params: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        return await self.run(lambda: self._client.raw(statement, params))
+
+    def transaction(self, *, isolation: str = "serializable") -> Transaction:
+        raise AuraTransactionError(
+            "leader redirect cannot wrap a transaction: a transaction's server-side state "
+            "lives on one node and cannot migrate. On not_leader, restart the transaction on "
+            "the leader (see Client.connect_to_leader)."
+        )
+
+    def stream(self, *args: Any, **kwargs: Any) -> Any:
+        raise AuraBackendCapabilityError(
+            "leader redirect cannot wrap a streaming cursor: an open cursor's state lives on "
+            "one node and cannot be redirected mid-stream"
+        )
 
 
 class _ClientConnector:

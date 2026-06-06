@@ -26,6 +26,7 @@ from ..errors import (
     AuraConstraintError,
     AuraError,
     AuraNotFoundError,
+    AuraNotLeaderError,
     AuraProtocolError,
     AuraQueryError,
     AuraSchemaError,
@@ -72,6 +73,7 @@ _ERROR_CODE_MAP: dict[str, type[AuraError]] = {
     "constraint_violation": AuraConstraintError,
     "authentication_error": AuraAuthenticationError,
     "authorization_error": AuraAuthorizationError,
+    "not_leader": AuraNotLeaderError,
     "protocol_error": AuraProtocolError,
     "server_error": AuraServerError,
 }
@@ -82,6 +84,16 @@ _MUTATION_OPS = frozenset({"insert", "update", "delete", "upsert"})
 def error_from_frame(frame: Frame) -> AuraError:
     """Build the typed :class:`AuraError` described by an ``ERROR`` frame (no side effects)."""
     body = ErrorBody.from_payload(decode_body(frame.payload))
+    if body.code == "not_leader":
+        # Leader-routing hints ride in the error context (and/or a nested
+        # ``not_leader`` object); surface them on the dedicated exception.
+        return AuraNotLeaderError.from_server_payload(
+            body.message or "not leader",
+            code=body.code,
+            retryable=body.retryable,
+            request_id=frame.request_id,
+            payload=body.context,
+        )
     error_cls = _ERROR_CODE_MAP.get(body.code, AuraServerError)
     return error_cls(
         body.message or "Server error",

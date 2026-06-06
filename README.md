@@ -229,11 +229,19 @@ async with connect(
         assert await tx.query(User).where(User.id == 1).count() == 1
 ```
 
-**Compatibility:** Aura Connector 0.3.x talks to AuraDB 0.2.x over AWP 1. Aura Connector 0.2.x
-does **not** speak the new authenticated, TLS-capable native AWP path and cannot connect to an
-AuraDB v0.2.0 server — upgrade to 0.3.x. The legacy `aura://` schemes use the connector's
-bundled reference protocol path, not the AuraDB v0.2.0 network server. See
-[docs/AURADB.md](docs/AURADB.md).
+**Compatibility:** Aura Connector 0.4.x talks to AuraDB 0.7.x over AWP 1 (and to AuraDB 0.6.x
+single-node servers, where the cluster ergonomics simply never trigger). Aura Connector 0.2.x
+does **not** speak the authenticated, TLS-capable native AWP path. The legacy `aura://`
+schemes use the connector's bundled reference protocol path, not the AuraDB network server.
+See [docs/AURADB.md](docs/AURADB.md).
+
+**Cluster preview (experimental, opt-in):** AuraDB's multi-node mode has no production high
+availability or automatic failover — single-node mode is the recommended production
+deployment. When only the leader accepts writes, a write to a follower raises
+`AuraNotLeaderError` carrying the leader address. Catch it and call
+`client.connect_to_leader(exc)`, or opt in to a bounded `client.with_leader_redirect()`. See
+[docs/AURADB.md](docs/AURADB.md) and the [`auradb_cluster`](examples/auradb_cluster.py) /
+[`auradb_not_leader`](examples/auradb_not_leader.py) examples.
 
 ## Quick start
 

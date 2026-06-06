@@ -30,14 +30,25 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..config import ClientConfig, parse_dsn
-from ..errors import AuraError
+from ..errors import AuraBackendCapabilityError, AuraError
 from ..observability import Metrics, _TelemetryBridge
 from .base import Backend
 
 if TYPE_CHECKING:
     from ..transport.base import Transport
 
-__all__ = ["BackendURL", "SCHEME_FAMILY", "resolve_backend", "backend_family"]
+__all__ = [
+    "BackendURL",
+    "SCHEME_FAMILY",
+    "backend_family",
+    "backend_from_config",
+    "resolve_backend",
+]
+
+#: Backend families that speak the Aura Wire Protocol (AuraDB native, the legacy
+#: reference path, and the in-process reference engine). Only these can be
+#: re-pointed at a different node for a cluster leader redirect.
+_PROTOCOL_FAMILIES = frozenset({"auradb_native", "auradb", "memory"})
 
 #: Maps each supported DSN scheme to its backend family name.
 SCHEME_FAMILY: dict[str, str] = {
@@ -144,6 +155,47 @@ def _config_for(url: BackendURL) -> ClientConfig:
         database=url.database,
         options=dict(url.options),
     )
+
+
+def backend_from_config(
+    config: ClientConfig,
+    *,
+    metrics: Metrics,
+    telemetry: _TelemetryBridge,
+    transport: Transport | None = None,
+) -> Backend:
+    """Build a protocol backend from an existing :class:`ClientConfig`.
+
+    Unlike :func:`resolve_backend`, this takes a fully-resolved config rather than
+    a DSN, so it preserves authentication and TLS settings that a DSN string cannot
+    carry (a token, client-certificate paths, hostname-verification choice). It is
+    used to re-point an AuraDB client at a cluster leader without re-reading a DSN,
+    keeping the original security posture intact.
+
+    Raises :class:`AuraBackendCapabilityError` for non-protocol backends
+    (``sqlite``/``postgres``/…), which have no wire transport to redirect.
+    """
+    family = SCHEME_FAMILY.get(config.scheme)
+    if family not in _PROTOCOL_FAMILIES:
+        raise AuraBackendCapabilityError(
+            f"Backend scheme {config.scheme!r} does not speak the Aura Wire Protocol "
+            "and cannot be redirected to a cluster leader",
+            context={"scheme": config.scheme},
+        )
+    if family == "auradb_native":
+        from .auradb_native import AuraDBNativeBackend
+
+        return AuraDBNativeBackend(config, metrics, telemetry)
+    from ..transport.memory import MemoryTransport
+    from ..transport.tcp import TCPTransport
+    from .auradb import AuraDBBackend
+    from .memory import MemoryBackend
+
+    if family == "memory":
+        transport = transport or MemoryTransport(max_payload_bytes=config.max_payload_bytes)
+        return MemoryBackend(config, transport, metrics, telemetry)
+    transport = transport or TCPTransport(config)
+    return AuraDBBackend(config, transport, metrics, telemetry)
 
 
 def resolve_backend(

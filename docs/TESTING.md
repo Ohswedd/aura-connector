@@ -57,6 +57,28 @@ docker compose -f docker-compose.backends.yml down -v
 The `.github/workflows/databases.yml` workflow runs the same gated tests against service
 containers in CI, separately from the lightweight main workflow.
 
+### Live AuraDB and cluster tests
+
+`tests/integration/test_auradb_native_live.py` exercises the native backend against a single
+AuraDB server when `AURADB_TEST_ADDR` is set (optionally `AURADB_TEST_TOKEN`,
+`AURADB_TEST_TLS_CA`).
+
+`tests/integration/test_auradb_cluster_live.py` is the cluster-preview conformance suite. It
+skips unless both leader and follower DSNs are configured, and verifies the leader smoke
+path, the follower `not_leader` error and its leader address, `connect_to_leader`, the bounded
+redirect helper, and that transactions are never auto-redirected:
+
+```bash
+export AURADB_CLUSTER_LEADER_DSN=auradbs://leader:7171/itest
+export AURADB_CLUSTER_FOLLOWER_DSN=auradbs://follower:7171/itest
+export AURADB_CLUSTER_TOKEN=...            # if the cluster requires auth
+export AURADB_CLUSTER_CA=/path/to/ca.pem   # for auradbs:// TLS
+python -m pytest tests/integration/test_auradb_cluster_live.py -vv
+```
+
+The multi-node mode under test is experimental and opt-in; this is preview conformance, not
+a production high-availability claim.
+
 ## Benchmarks
 
 Each script prints **real measured** timings for the local machine (never fabricated):

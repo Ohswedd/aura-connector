@@ -22,6 +22,7 @@ configuration objects redact credentials in their `repr`.
 | `AuraAuthorizationError` | `authorization_error` | no | Insufficient permission. |
 | `AuraServerError` | `server_error` | yes | Server-side internal error. |
 | `AuraNotFoundError` | `not_found` | no | Requested record does not exist. |
+| `AuraNotLeaderError` | `not_leader` | yes | Write reached a non-leader node in the AuraDB cluster preview. |
 | `AuraConstraintError` | `constraint_violation` | no | Unique/primary-key constraint violated. |
 | `AuraConstraintViolation` | `constraint_violation` | no | Alias of `AuraConstraintError` (same class). |
 | `AuraMigrationError` | `migration_error` | no | A schema migration cannot be planned or applied. |
@@ -45,6 +46,29 @@ except AuraError as exc:
                 request_id=exc.request_id)
     raise
 ```
+
+## Cluster preview: `AuraNotLeaderError`
+
+In AuraDB's experimental multi-node preview, a write sent to a follower is rejected with a
+`not_leader` response, which the connector maps to `AuraNotLeaderError`. Beyond the common
+`AuraError` fields it exposes the leader-routing hints the server provided, each `None` when
+the server did not supply it:
+
+| Attribute | Meaning |
+| --------- | ------- |
+| `leader_addr` | Best usable client-facing address of the current leader, for a redirect. |
+| `leader_client_addr` | The leader's declared client address, as the server reported it. |
+| `leader_hint` | A free-form leader hint string, when provided. |
+| `leader_node_id` | The recognized leader's node id. |
+| `current_node_id` | The id of the non-leader node that was reached. |
+| `retryable` | `True` when a leader is known (the operation may succeed if redirected). |
+| `raw_payload` | The full structured server payload, for diagnostics. |
+
+A `True` `retryable` does **not** mean the connector retries writes automatically. Redirecting
+is always explicit: catch the error and call `Client.connect_to_leader(exc)` /
+`Client.reconnect_to(addr)`, or opt in to `Client.with_leader_redirect(...)`. The hints are
+extracted from either the top level of the payload or a nested `not_leader` object, and a
+missing field never raises. See [`AURADB.md`](AURADB.md) and [`CLIENT.md`](CLIENT.md).
 
 ## Retry classification
 

@@ -24,6 +24,7 @@ from ..errors import (
     AuraConnectionError,
     AuraConstraintError,
     AuraNotFoundError,
+    AuraNotLeaderError,
     AuraProtocolError,
     AuraQueryError,
     AuraSchemaError,
@@ -56,6 +57,7 @@ _SERVER_ERROR_MAP = {
     "conflict": AuraConstraintError,
     "schema_violation": AuraConstraintError,
     "invalid_request": AuraQueryError,
+    "not_leader": AuraNotLeaderError,
     "protocol": AuraProtocolError,
     "corruption": AuraServerError,
     "storage": AuraServerError,
@@ -96,6 +98,17 @@ _VECTOR_METRIC = {"cosine": "cosine", "euclidean": "euclidean", "dot": "dot_prod
 def _error_from_payload(payload: dict[str, Any]) -> Exception:
     code = str(payload.get("code", "internal"))
     message = str(payload.get("message", "server error"))
+    if code == "not_leader":
+        # The multi-node preview enriches the error with structured leader-routing
+        # fields (top-level and/or nested under ``not_leader``); preserve them so
+        # callers can redirect without parsing the message.
+        retryable = payload.get("retryable")
+        return AuraNotLeaderError.from_server_payload(
+            message,
+            code=code,
+            retryable=None if retryable is None else bool(retryable),
+            payload=payload,
+        )
     cls = _SERVER_ERROR_MAP.get(code, AuraServerError)
     return cls(message, code=code)
 
