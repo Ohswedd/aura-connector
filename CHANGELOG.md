@@ -43,6 +43,12 @@ v1.1.0; exact vector search remains the correctness baseline.
 - Bumped to v0.5.0 and paired with AuraDB v1.1.0 (tested 1.1.0, supported 1.1.x).
 - Existing `nearest`, `similar_to`, `text`, and `fusion` builder methods are unchanged and
   remain supported.
+- `transaction(isolation=…)` now defaults to `"snapshot"` instead of `"serializable"`, matching
+  AuraDB's actual guarantee — snapshot isolation with optimistic (first-committer-wins) conflict
+  detection. The connector does not provide serializable isolation. The `"serializable"` token is
+  still accepted as a deprecated compatibility alias that maps to snapshot isolation, so existing
+  callers do not break; it does not change AuraDB transaction semantics. No AuraDB server or wire
+  changes — the server already applies snapshot isolation regardless of the token.
 
 ## [0.4.1] - 2026-06-06
 

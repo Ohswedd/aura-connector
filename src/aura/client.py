@@ -53,6 +53,33 @@ _MUTATION_OPS = frozenset({"insert", "update", "delete", "upsert"})
 #: never become an unbounded retry loop even if misconfigured.
 _MAX_LEADER_REDIRECTS = 10
 
+#: Canonical transaction isolation token. AuraDB provides **snapshot isolation with
+#: optimistic (first-committer-wins) conflict detection** on commit; it does not
+#: provide serializable isolation, and the connector does not upgrade it. New code
+#: should pass ``"snapshot"`` (``"snapshot_isolation"`` is accepted as a synonym).
+DEFAULT_ISOLATION = "snapshot"
+
+#: Accepted aliases that normalize to :data:`DEFAULT_ISOLATION`. ``"serializable"`` is a
+#: deprecated compatibility alias kept so existing callers do not break: it maps to
+#: AuraDB snapshot isolation and does **not** change AuraDB transaction semantics.
+_ISOLATION_ALIASES = {
+    "snapshot": "snapshot",
+    "snapshot_isolation": "snapshot",
+    "serializable": "snapshot",  # deprecated alias — AuraDB is not serializable
+}
+
+
+def _normalize_isolation(isolation: str) -> str:
+    """Map an isolation token to its canonical form.
+
+    Known tokens (``"snapshot"``, ``"snapshot_isolation"``, and the deprecated
+    ``"serializable"`` alias) normalize to ``"snapshot"`` so the connector never sends
+    or claims serializable isolation against AuraDB. Unrecognized tokens pass through
+    unchanged — AuraDB ignores the wire token and always applies snapshot isolation,
+    and database backends manage isolation through their own driver.
+    """
+    return _ISOLATION_ALIASES.get(isolation, isolation)
+
 
 #: DSN schemes the redirect helpers accept in an explicit leader address. These
 #: mirror the wire-protocol schemes :mod:`aura.config` understands; a redirect
@@ -358,10 +385,18 @@ class Client:
         result = await self._execute(node, AuraModel, 0)
         return [dict(r) for r in result.rows]
 
-    def transaction(self, *, isolation: str = "serializable") -> Transaction:
+    def transaction(self, *, isolation: str = DEFAULT_ISOLATION) -> Transaction:
+        """Open a transaction.
+
+        AuraDB transactions provide snapshot isolation with optimistic conflict
+        detection on commit (first-committer-wins); the connector does not upgrade
+        them to serializable isolation. ``isolation`` defaults to ``"snapshot"``. The
+        legacy ``"serializable"`` token is accepted as a deprecated compatibility
+        alias for snapshot isolation and should not be used in new code.
+        """
         self._ensure_open()
         self._tx_counter += 1
-        return Transaction(self, self._tx_counter, isolation)
+        return Transaction(self, self._tx_counter, _normalize_isolation(isolation))
 
     # -- cluster leader redirection (AuraDB multi-node preview) ------------------
     def _require_protocol_backend(self) -> None:
@@ -726,7 +761,9 @@ class Transaction:
 
     Mutations and queries issued through the transaction run under its transaction id;
     the reference server stages them on an overlay that is committed on clean exit and
-    discarded on error.
+    discarded on error. AuraDB runs the transaction under snapshot isolation with
+    optimistic conflict detection on commit (first-committer-wins); it is not
+    serializable, and the connector does not upgrade it.
     """
 
     def __init__(self, client: Client, txid: int, isolation: str) -> None:
@@ -875,7 +912,7 @@ class LeaderRedirect:
     ) -> list[dict[str, Any]]:
         return await self.run(lambda: self._client.raw(statement, params))
 
-    def transaction(self, *, isolation: str = "serializable") -> Transaction:
+    def transaction(self, *, isolation: str = DEFAULT_ISOLATION) -> Transaction:
         raise AuraTransactionError(
             "leader redirect cannot wrap a transaction: a transaction's server-side state "
             "lives on one node and cannot migrate. On not_leader, restart the transaction on "

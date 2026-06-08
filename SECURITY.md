@@ -2,13 +2,13 @@
 
 ## Supported versions
 
-Aura Connector is at `0.3.0`. Security fixes target the latest released version on
+Aura Connector is at `0.5.0`. Security fixes target the latest released version on
 the `main` branch.
 
 | Version | Supported |
 |---|---|
-| 0.3.x | yes |
-| < 0.3 | no |
+| 0.5.x | yes |
+| < 0.5 | no |
 
 ## Reporting a vulnerability
 

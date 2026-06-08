@@ -1,10 +1,12 @@
 # Native AuraDB backend
 
-Aura Connector 0.3.0 adds a **native AuraDB backend** that speaks the Aura Wire Protocol
-version 1 (AWP 1) to a running [AuraDB](https://github.com/Ohswedd/auradb) **v0.2.0** server
-over TCP or TLS. It opens its own socket, performs the AWP handshake (with optional
-static-token authentication), translates the connector's canonical Query IR to the server's
-Query IR, and decodes results back into your typed models.
+The **native AuraDB backend** speaks the Aura Wire Protocol version 1 (AWP 1) to a running
+[AuraDB](https://github.com/Ohswedd/auradb) server over TCP or TLS. It opens its own socket,
+performs the AWP handshake (with optional static-token authentication), translates the
+connector's canonical Query IR to the server's Query IR, and decodes results back into your
+typed models. AWP 1 with auth and TLS first shipped in AuraDB v0.2.0, so **v0.2.0 is the
+minimum native server version**; the current coordinated server is AuraDB v1.1.0 (see
+[COMPATIBILITY.md](COMPATIBILITY.md)).
 
 The same typed model and query API you use with every other backend works unchanged — only
 the DSN changes.
@@ -13,8 +15,8 @@ the DSN changes.
 
 | Scheme       | Transport     | Use for |
 | ------------ | ------------- | ------- |
-| `auradb://`  | plaintext TCP | A local or trusted-network AuraDB v0.2.0 server |
-| `auradbs://` | TLS           | A remote AuraDB v0.2.0 server (TLS terminated by the server) |
+| `auradb://`  | plaintext TCP | A local or trusted-network AuraDB server |
+| `auradbs://` | TLS           | A remote AuraDB server (TLS terminated by the server) |
 
 ```python
 from aura import connect
@@ -34,13 +36,13 @@ The path segment (`/app` above) names the logical database/namespace.
 
 The pre-existing `aura://`, `auras://`, and `aura+tcp://` schemes select the connector's
 **bundled protocol/reference path** and are retained for backward compatibility. They do
-**not** complete an AWP handshake with the AuraDB v0.2.0 network server. To connect to a real
-AuraDB v0.2.0 server, use `auradb://` (or `auradbs://`). The `aura+memory://` and `memory://`
+**not** complete an AWP handshake with the AuraDB network server. To connect to a real
+AuraDB server, use `auradb://` (or `auradbs://`). The `aura+memory://` and `memory://`
 schemes continue to drive the in-process reference engine for tests and local development.
 
 ## Authentication
 
-AuraDB v0.2.0 enforces static-token authentication when the server enables it. Provide a
+AuraDB enforces static-token authentication when the server enables it. Provide a
 token with `TokenAuth`:
 
 ```python
@@ -103,7 +105,7 @@ development against self-signed certificates.
 ## Transactions
 
 The native backend supports `begin` / `commit` / `rollback` with **read-your-writes** against
-AuraDB v0.2.0:
+an AuraDB server:
 
 ```python
 async with client.transaction() as tx:
@@ -117,27 +119,28 @@ async with client.transaction() as tx:
 Reads issued inside a transaction (find, filter, count, exists, vector nearest, document-path
 filters, full-text search, and cursor paging) carry the server-side transaction id, so they
 observe the transaction's own staged writes and do **not** observe its staged deletes. These
-effects stay invisible to other connections until commit. This relies on AuraDB v0.2.0's
+effects stay invisible to other connections until commit. This relies on the server's
 transaction-scoped reads; **AuraDB v0.2.0 is the minimum server version** for transactional
 reads to behave correctly.
 
-The isolation model is read-your-writes over committed state with optimistic conflict
-detection on commit; it is not serializable MVCC.
+The isolation model is **snapshot isolation**: read-your-writes over committed state with
+optimistic (first-committer-wins) conflict detection on commit. It is not serializable
+isolation, and the connector does not upgrade AuraDB transactions to serializable isolation.
 
 ## Compatibility
 
-| Aura Connector | AuraDB     | Protocol | Status |
-| -------------- | ---------- | -------- | ------ |
-| 0.4.x          | 0.7.x      | AWP 1    | Supported — adds cluster-preview ergonomics (`AuraNotLeaderError`, leader redirect) |
-| 0.4.x          | 0.6.x      | AWP 1    | Supported — single-node; cluster ergonomics simply never trigger |
-| 0.3.x          | 0.2.x      | AWP 1    | Supported — native backend (`auradb://`, `auradbs://`), auth + TLS |
-| 0.2.x          | 0.2.x      | n/a      | Not supported — 0.2.x does not speak the authenticated, TLS-capable native AWP path |
+[COMPATIBILITY.md](COMPATIBILITY.md) is the authoritative matrix. In brief:
 
-- **Aura Connector 0.3.x works with AuraDB 0.2.x** over AWP 1, including static-token
-  authentication and server-verified TLS.
-- **Aura Connector 0.2.x does not** speak the new authenticated, TLS-capable native AWP path
-  and cannot complete an AWP handshake with the AuraDB v0.2.0 network server. Upgrade to
-  0.3.x to talk to AuraDB v0.2.0.
+| Aura Connector | AuraDB        | Protocol | Status |
+| -------------- | ------------- | -------- | ------ |
+| 0.5.x          | 1.1.x         | AWP 1    | Recommended — first-class search and ranking (`search_text`, `search_vector`, `search_hybrid`) |
+| 0.5.x          | 1.0.x         | AWP 1    | Supported — basic operations; search APIs raise `AuraCapabilityError` (server predates BM25/hybrid) |
+| 0.4.x          | 0.7.x / 1.x   | AWP 1    | Supported — cluster-preview ergonomics (`AuraNotLeaderError`, leader redirect); no search APIs |
+| 0.3.x          | 0.2.x+        | AWP 1    | Supported — native backend (`auradb://`, `auradbs://`), auth + TLS |
+| 0.2.x          | —             | n/a      | Not supported — 0.2.x does not speak the authenticated, TLS-capable native AWP path |
+
+- **Aura Connector 0.2.x does not** speak the authenticated, TLS-capable native AWP path and
+  cannot complete an AWP handshake with the AuraDB network server. Upgrade to 0.3.x or newer.
 
 ## Cluster preview ergonomics (AuraDB multi-node)
 

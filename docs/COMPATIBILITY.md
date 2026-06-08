@@ -26,6 +26,10 @@ Notes:
 - **Cluster mode is experimental and opt-in.** There is no production high
   availability, automatic failover, distributed transactions, or linearizable
   follower reads. Single-node AuraDB remains the recommended production path.
+- **Transaction isolation is snapshot isolation** with optimistic (first-committer-wins)
+  conflict detection on commit — not serializable isolation. `transaction(isolation=…)`
+  defaults to `"snapshot"`; `"serializable"` is accepted only as a deprecated compatibility
+  alias for snapshot isolation and does not change AuraDB semantics.
 
 ## Backend (database adapter) compatibility
 

@@ -64,10 +64,14 @@ await client.delete(User).where(User.id == 1).execute()
 
 `client.transaction()` is an async context manager: it commits on clean exit and rolls
 back on exception. Mutations and queries issued through the transaction run
-under its transaction id.
+under its transaction id. AuraDB runs the transaction under **snapshot isolation with
+optimistic conflict detection** (first-committer-wins on commit); the connector does
+not upgrade it to serializable isolation. `isolation` defaults to `"snapshot"`; the
+legacy `"serializable"` token is accepted only as a deprecated alias for snapshot
+isolation.
 
 ```python
-async with client.transaction(isolation="serializable") as tx:
+async with client.transaction(isolation="snapshot") as tx:
     account = await tx.query(Account).where(Account.id == aid).one()
     await tx.insert(LedgerEntry(id=1, account=account, amount_cents=-5000))
     await tx.update(Account).where(Account.id == aid).set(balance_cents=new_balance).execute()
