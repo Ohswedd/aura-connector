@@ -7,6 +7,31 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-09
+
+Patch over v0.5.0 that corrects the transaction isolation default label and documentation to
+match AuraDB's actual guarantee. No behavioral or wire change: AuraDB already applies snapshot
+isolation regardless of the token sent, so v0.5.0 and v0.5.1 behave identically at runtime —
+this release fixes the misleading default label and docs only. Paired with AuraDB v1.1.0
+(tested 1.1.0, supported 1.1.x); the Aura Wire Protocol (AWP 1) is unchanged.
+
+### Changed
+
+- `transaction(isolation=…)` now defaults to `"snapshot"` instead of `"serializable"`, matching
+  AuraDB's actual guarantee — snapshot isolation with optimistic (first-committer-wins) conflict
+  detection. The connector does not provide serializable isolation. `__version__` and the package
+  version are bumped to 0.5.1.
+- The `"serializable"` token is still accepted as a deprecated compatibility alias that maps to
+  snapshot isolation, so callers passing it (including code written against v0.5.0) do not break;
+  it does not change AuraDB transaction semantics.
+
+### Fixed
+
+- Documentation and examples no longer present serializable isolation as a guarantee. README,
+  `docs/TRANSACTIONS.md`, `docs/CLIENT.md`, `docs/AURADB.md`, and `docs/COMPATIBILITY.md` now state
+  that AuraDB transactions provide snapshot isolation with optimistic conflict detection and that
+  the connector does not upgrade them to serializable isolation.
+
 ## [0.5.0] - 2026-06-08
 
 Coordinated release with AuraDB v1.1.0, adding first-class connector support for the new
@@ -43,12 +68,6 @@ v1.1.0; exact vector search remains the correctness baseline.
 - Bumped to v0.5.0 and paired with AuraDB v1.1.0 (tested 1.1.0, supported 1.1.x).
 - Existing `nearest`, `similar_to`, `text`, and `fusion` builder methods are unchanged and
   remain supported.
-- `transaction(isolation=…)` now defaults to `"snapshot"` instead of `"serializable"`, matching
-  AuraDB's actual guarantee — snapshot isolation with optimistic (first-committer-wins) conflict
-  detection. The connector does not provide serializable isolation. The `"serializable"` token is
-  still accepted as a deprecated compatibility alias that maps to snapshot isolation, so existing
-  callers do not break; it does not change AuraDB transaction semantics. No AuraDB server or wire
-  changes — the server already applies snapshot isolation regardless of the token.
 
 ## [0.4.1] - 2026-06-06
 
