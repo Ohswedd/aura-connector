@@ -17,11 +17,13 @@ __all__ = [
     "CountQuery",
     "DeleteQuery",
     "ExistsQuery",
+    "HybridSearch",
     "Include",
     "InsertQuery",
     "QueryNode",
     "RawQuery",
     "SelectQuery",
+    "TextRankedSearch",
     "TextSearch",
     "TraverseQuery",
     "UpdateQuery",
@@ -61,13 +63,74 @@ class VectorSearch:
 
 @dataclass(frozen=True)
 class TextSearch:
-    """Lexical search parameters for hybrid retrieval."""
+    """Lexical search parameters for hybrid retrieval (legacy `text()`)."""
 
     fields: tuple[str, ...]
     query: str
 
     def to_ir(self) -> dict[str, Any]:
         return {"fields": list(self.fields), "query": self.query}
+
+
+@dataclass(frozen=True)
+class TextRankedSearch:
+    """Ranked full-text (BM25) search parameters for `search_text()`."""
+
+    field: str
+    query: str
+    operator: str = "or"
+    rank: str = "bm25"
+    k1: float | None = None
+    b: float | None = None
+
+    def to_ir(self) -> dict[str, Any]:
+        ir: dict[str, Any] = {
+            "field": self.field,
+            "query": self.query,
+            "operator": self.operator,
+            "rank": self.rank,
+        }
+        if self.k1 is not None:
+            ir["k1"] = self.k1
+        if self.b is not None:
+            ir["b"] = self.b
+        return ir
+
+
+@dataclass(frozen=True)
+class HybridSearch:
+    """Hybrid text-plus-vector search parameters for `search_hybrid()`."""
+
+    text_field: str
+    text_query: str
+    vector_field: str
+    vector: tuple[float, ...]
+    top_k: int = 10
+    metric: str = "cosine"
+    weight_text: float = 0.5
+    weight_vector: float = 0.5
+    fusion: str = "weighted_sum"
+    operator: str = "or"
+    k1: float | None = None
+    b: float | None = None
+
+    def to_ir(self) -> dict[str, Any]:
+        ir: dict[str, Any] = {
+            "text_field": self.text_field,
+            "text_query": self.text_query,
+            "vector_field": self.vector_field,
+            "vector": list(self.vector),
+            "top_k": self.top_k,
+            "metric": self.metric,
+            "weights": {"text": self.weight_text, "vector": self.weight_vector},
+            "fusion": self.fusion,
+            "operator": self.operator,
+        }
+        if self.k1 is not None:
+            ir["k1"] = self.k1
+        if self.b is not None:
+            ir["b"] = self.b
+        return ir
 
 
 class QueryNode(abc.ABC):
@@ -94,6 +157,8 @@ class SelectQuery(QueryNode):
     offset: int | None = None
     vector: VectorSearch | None = None
     text: TextSearch | None = None
+    text_search: TextRankedSearch | None = None
+    hybrid: HybridSearch | None = None
     fusion_alpha: float | None = None
     consistency: str = "strong"
     timeout_ms: int | None = None
@@ -116,6 +181,10 @@ class SelectQuery(QueryNode):
             ir["vector"] = self.vector.to_ir()
         if self.text is not None:
             ir["text"] = self.text.to_ir()
+        if self.text_search is not None:
+            ir["text_search"] = self.text_search.to_ir()
+        if self.hybrid is not None:
+            ir["hybrid"] = self.hybrid.to_ir()
         if self.fusion_alpha is not None:
             ir["fusion"] = {"alpha": self.fusion_alpha}
         ir["consistency"] = self.consistency

@@ -7,6 +7,43 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-08
+
+Coordinated release with AuraDB v1.1.0, adding first-class connector support for the new
+AuraDB search and ranking features. The Aura Wire Protocol version (AWP 1) is unchanged —
+the new query clauses are additive Query IR and response fields. AuraDB single-node remains
+the recommended production deployment; multi-node remains an HA candidate preview, not
+production high availability. Approximate (ANN) vector search is not implemented in AuraDB
+v1.1.0; exact vector search remains the correctness baseline.
+
+### Added
+
+- `QueryBuilder.search_text(field, query, *, rank="bm25", operator="or", k1=, b=, limit=)`:
+  ranked full-text (BM25) search returning documents ordered by relevance, with optional
+  AND term semantics and tunable BM25 parameters.
+- `QueryBuilder.search_vector(field, vector, *, metric=, top_k=)`: exact vector
+  nearest-neighbour search (a clearer alias over `nearest`).
+- `QueryBuilder.search_hybrid(text_field, query, vector_field, vector, *, weights=, fusion=,
+  top_k=, metric=, operator=)`: hybrid text-plus-vector retrieval with `weighted_sum` or
+  `reciprocal_rank_fusion` score fusion.
+- Typed result scores: `aura.search_scores(instance)` returns a `SearchScores` with `score`,
+  `text_score`, `vector_score`, and the 1-based `rank` (populated for ranked queries).
+- Capability negotiation: ranked-search queries are pre-checked against the backend's
+  advertised capabilities and raise `AuraCapabilityError` (alias of
+  `AuraBackendCapabilityError`) when a backend does not support the requested feature, rather
+  than silently dropping the clause. SQL/Mongo/Redis backends raise; the AuraDB native and
+  in-memory reference backends support BM25 and hybrid search.
+- Examples: `examples/auradb_text_search.py`, `examples/auradb_hybrid_search.py`, and
+  `examples/auradb_explain_analyze.py`.
+- The in-process reference engine implements BM25 ranking and hybrid fusion so the search
+  APIs are exercised end-to-end in the default test suite with no external service.
+
+### Changed
+
+- Bumped to v0.5.0 and paired with AuraDB v1.1.0 (tested 1.1.0, supported 1.1.x).
+- Existing `nearest`, `similar_to`, `text`, and `fusion` builder methods are unchanged and
+  remain supported.
+
 ## [0.4.1] - 2026-06-06
 
 Coordinated patch release with AuraDB v0.7.1, focused on cluster-preview connector

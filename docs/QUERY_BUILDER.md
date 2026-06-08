@@ -166,3 +166,26 @@ Parameters are bound, never concatenated:
 ```python
 rows = await client.raw("SELECT * FROM User WHERE id = $uid", {"uid": 1})
 ```
+
+## Ranked search (v0.5.0)
+
+For AuraDB v1.1.0 ranked retrieval, use the first-class search methods — see
+[SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md). BM25 search needs a full-text index on the
+field, declared with `Field(full_text=True)`:
+
+```python
+# BM25 ranked full-text search.
+await client.search(Doc).search_text("body", "vector index", rank="bm25").all()
+
+# Exact vector nearest-neighbour search.
+await client.search(Doc).search_vector("embedding", q, metric="cosine", top_k=10).all()
+
+# Hybrid text + vector with score fusion.
+await client.search(Doc).search_hybrid("body", "vector index", "embedding", q,
+                                       weights=(0.5, 0.5), fusion="weighted_sum").all()
+```
+
+Scores are read with `aura.search_scores(row)` (`score`, `text_score`, `vector_score`,
+`rank`). Backends — and pre-1.1.0 AuraDB servers — that do not support a requested feature
+raise `AuraCapabilityError`; `client.capabilities()` reflects the connected server. See
+`examples/auradb_search_capabilities.py` and `examples/auradb_search_errors.py`.

@@ -43,6 +43,7 @@ class FieldInfo:
     primary_key: bool = False
     unique: bool = False
     index: bool = False
+    full_text: bool = False
     nullable: bool = False
     default: Any = MISSING
     default_factory: Callable[[], Any] | None = None
@@ -101,6 +102,7 @@ def Field(
     primary_key: bool = False,
     unique: bool = False,
     index: bool = False,
+    full_text: bool = False,
     nullable: bool = False,
     default: Any = MISSING,
     default_factory: Callable[[], Any] | None = None,
@@ -121,6 +123,7 @@ def Field(
         primary_key=primary_key,
         unique=unique,
         index=index,
+        full_text=full_text,
         nullable=nullable,
         default=default,
         default_factory=default_factory,

@@ -48,6 +48,7 @@ class FieldSchema:
     primary_key: bool = False
     unique: bool = False
     index: bool = False
+    full_text: bool = False
     container: str = "none"
     vector_dim: int | None = None
     vector_index: str | None = None
@@ -66,6 +67,8 @@ class FieldSchema:
             "container": self.container,
             "has_default": self.has_default,
         }
+        if self.full_text:
+            data["full_text"] = True
         if self.vector_dim is not None:
             data["vector_dim"] = self.vector_dim
         if self.vector_index is not None:

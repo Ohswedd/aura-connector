@@ -17,6 +17,7 @@ __all__ = [
     "AuraAuthorizationError",
     "AuraBackendCapabilityError",
     "AuraBackendError",
+    "AuraCapabilityError",
     "AuraClientClosedError",
     "AuraConnectionError",
     "AuraConstraintError",
@@ -372,6 +373,13 @@ class AuraBackendCapabilityError(AuraBackendError):
     """
 
     default_code = "backend_capability_error"
+
+
+#: Backwards/forwards-compatible alias used by the search/ranking APIs when a
+#: server or backend does not advertise a requested capability (BM25, hybrid, or
+#: an approximate-vector preview). It is the same type as
+#: :class:`AuraBackendCapabilityError`.
+AuraCapabilityError = AuraBackendCapabilityError
 
 
 class AuraDialectError(AuraBackendError):

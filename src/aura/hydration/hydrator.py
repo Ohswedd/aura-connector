@@ -66,6 +66,18 @@ class Hydrator:
         score = row.get("__score__")
         if score is not None:
             instance.__dict__["__score__"] = float(score)
+        # Hybrid / ranked component scores and the 1-based rank, when the server
+        # (or reference engine) reported them.
+        for raw_key, attr in (
+            ("__text_score__", "__text_score__"),
+            ("__vector_score__", "__vector_score__"),
+        ):
+            value = row.get(raw_key)
+            if value is not None:
+                instance.__dict__[attr] = float(value)
+        rank = row.get("__rank__")
+        if rank is not None:
+            instance.__dict__["__rank__"] = int(rank)
         return instance
 
     @staticmethod

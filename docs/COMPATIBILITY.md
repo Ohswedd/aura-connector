@@ -7,7 +7,9 @@ which AuraDB server version, and over which Aura Wire Protocol (AWP) revision.
 
 | Aura Connector | AuraDB server | Protocol | Status |
 | -------------- | ------------- | -------- | ------ |
-| 0.4.x          | 0.7.x         | AWP 1    | Supported — cluster-preview ergonomics (`AuraNotLeaderError`, leader redirect helpers). 0.4.1 is a docs/ergonomics polish over 0.4.0; the wire surface is identical. |
+| 0.5.x          | 1.1.x         | AWP 1    | Supported — first-class search and ranking APIs (`search_text` BM25, `search_vector`, `search_hybrid`), typed scores, capability negotiation. The new clauses are additive Query IR; the wire revision is unchanged. |
+| 0.5.x          | 1.0.x         | AWP 1    | Non-search operations supported. The connector reads the server's advertised capabilities at handshake; a `search_text`/`search_hybrid` call against a pre-1.1.0 server raises `AuraCapabilityError` (the server does not advertise BM25/hybrid) rather than returning a silently-wrong result. |
+| 0.4.x          | 0.7.x / 1.0.x / 1.1.x | AWP 1 | Supported for non-search operations — cluster-preview ergonomics (`AuraNotLeaderError`, leader redirect helpers). 0.4.x predates the search APIs, so search/ranking is unavailable, but basic CRUD/transactions/vector against a 1.1.0 server work (AWP 1 unchanged). |
 | 0.4.x          | 0.2.x         | AWP 1    | Supported — the cluster fields are additive; against a single-node server the cluster ergonomics simply never trigger. |
 | 0.3.x          | 0.7.x / 0.2.x | AWP 1    | Supported — native backend (`auradb://`, `auradbs://`), static-token auth + TLS. Does not surface the typed `not_leader` ergonomics. |
 | 0.2.x          | any           | n/a      | Not supported for the native AWP path — 0.2.x predates the authenticated, TLS-capable native backend. |

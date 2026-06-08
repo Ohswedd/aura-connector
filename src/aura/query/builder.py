@@ -18,10 +18,12 @@ from .ast import (
     CountQuery,
     DeleteQuery,
     ExistsQuery,
+    HybridSearch,
     Include,
     InsertQuery,
     QueryNode,
     SelectQuery,
+    TextRankedSearch,
     TextSearch,
     TraverseQuery,
     UpdateQuery,
@@ -187,6 +189,91 @@ class QueryBuilder:
         if not 0.0 <= alpha <= 1.0:
             raise AuraQueryError("fusion alpha must be between 0 and 1")
         return self._clone(self._replace(fusion_alpha=alpha))
+
+    # -- v0.5.0 first-class ranked search ----------------------------------------
+    def search_text(
+        self,
+        field: FieldReference | str,
+        query: str,
+        *,
+        rank: str = "bm25",
+        operator: str = "or",
+        k1: float | None = None,
+        b: float | None = None,
+        limit: int | None = None,
+    ) -> QueryBuilder:
+        """Ranked full-text (BM25) search on a single full-text field."""
+        name = field.name if isinstance(field, FieldReference) else str(field)
+        if not query or not query.strip():
+            raise AuraQueryError("search_text query must be a non-empty string")
+        if rank not in {"bm25", "term_frequency"}:
+            raise AuraQueryError("rank must be 'bm25' or 'term_frequency'")
+        if operator not in {"or", "and"}:
+            raise AuraQueryError("operator must be 'or' or 'and'")
+        ts = TextRankedSearch(field=name, query=query, operator=operator, rank=rank, k1=k1, b=b)
+        new = self._replace(text_search=ts)
+        if limit is not None:
+            new = self._replace_on(new, limit=limit)
+        return self._clone(new)
+
+    def search_vector(
+        self,
+        field: FieldReference | str,
+        query_vector: Any,
+        *,
+        metric: str = "cosine",
+        top_k: int = 10,
+    ) -> QueryBuilder:
+        """Exact vector nearest-neighbour search returning the closest ``top_k``."""
+        if top_k <= 0:
+            raise AuraQueryError("top_k must be positive")
+        return self.nearest(field, query_vector, metric=metric, limit=top_k)
+
+    def search_hybrid(
+        self,
+        text_field: FieldReference | str,
+        query: str,
+        vector_field: FieldReference | str,
+        vector: Any,
+        *,
+        weights: tuple[float, float] = (0.5, 0.5),
+        fusion: str = "weighted_sum",
+        top_k: int = 10,
+        metric: str = "cosine",
+        operator: str = "or",
+        k1: float | None = None,
+        b: float | None = None,
+    ) -> QueryBuilder:
+        """Hybrid text-plus-vector search fusing BM25 and exact vector signals."""
+        tname = text_field.name if isinstance(text_field, FieldReference) else str(text_field)
+        vname = vector_field.name if isinstance(vector_field, FieldReference) else str(vector_field)
+        if not query or not query.strip():
+            raise AuraQueryError("search_hybrid query must be a non-empty string")
+        if fusion not in {"weighted_sum", "reciprocal_rank_fusion"}:
+            raise AuraQueryError("fusion must be 'weighted_sum' or 'reciprocal_rank_fusion'")
+        if operator not in {"or", "and"}:
+            raise AuraQueryError("operator must be 'or' or 'and'")
+        wt, wv = weights
+        if wt < 0 or wv < 0 or (wt == 0 and wv == 0):
+            raise AuraQueryError("hybrid weights must be non-negative and not both zero")
+        if top_k <= 0:
+            raise AuraQueryError("top_k must be positive")
+        hs = HybridSearch(
+            text_field=tname,
+            text_query=query,
+            vector_field=vname,
+            vector=_to_vector_tuple(vector),
+            top_k=top_k,
+            metric=metric,
+            weight_text=wt,
+            weight_vector=wv,
+            fusion=fusion,
+            operator=operator,
+            k1=k1,
+            b=b,
+        )
+        # top_k bounds the result page.
+        return self._clone(self._replace_on(self._replace(hybrid=hs), limit=top_k))
 
     def consistency(self, level: str) -> QueryBuilder:
         if level not in {"strong", "eventual"}:

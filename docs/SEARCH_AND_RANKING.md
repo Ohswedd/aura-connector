@@ -1,0 +1,121 @@
+# Search and ranking
+
+Aura Connector v0.5.0 exposes AuraDB v1.1.0's search and ranking features as first-class
+query-builder methods. All of them return models ordered by relevance/similarity, with
+typed scores accessible via `aura.search_scores`.
+
+## Declaring a full-text index
+
+BM25 ranked search (`search_text`) and the text side of `search_hybrid` require a full-text
+index on the model field. Declare it with `Field(full_text=True)`; the connector emits the
+index in the schema it creates on the AuraDB server:
+
+```python
+class Doc(Model):
+    id: int = Field(primary_key=True)
+    body: str = Field(full_text=True)     # builds a BM25 full-text index
+    embedding: Vector[3]
+```
+
+The legacy `text()` predicate (unranked `contains_text`) works without a declared index (the
+server scans), but BM25 ranking needs the index.
+
+## Ranked full-text search (BM25)
+
+`search_text` performs BM25 relevance ranking over a full-text indexed field. Unlike the
+legacy `text()` / `contains_text` predicate (an unranked boolean match), `search_text`
+returns documents ordered by relevance.
+
+```python
+rows = await client.search(Doc).search_text("body", "vector index", rank="bm25").all()
+```
+
+| Parameter  | Default  | Meaning                                                        |
+| ---------- | -------- | -------------------------------------------------------------- |
+| `rank`     | `"bm25"` | `"bm25"` or `"term_frequency"`                                 |
+| `operator` | `"or"`   | `"or"` (any term contributes) or `"and"` (all terms required) |
+| `k1`       | server   | BM25 term-saturation parameter                                 |
+| `b`        | server   | BM25 length-normalization parameter                            |
+| `limit`    | none     | maximum rows to return                                         |
+
+BM25 defaults on the server are `k1 = 1.2`, `b = 0.75`.
+
+## Exact vector search
+
+`search_vector` is exact nearest-neighbour search. Exact search is the correctness baseline
+in AuraDB v1.1.0; approximate (ANN/HNSW) search is not implemented.
+
+```python
+rows = await client.search(Doc).search_vector("embedding", q, metric="cosine", top_k=10).all()
+```
+
+`metric` is `"cosine"` (default), `"euclidean"`, or `"dot"`.
+
+## Hybrid search
+
+`search_hybrid` fuses BM25 text relevance and exact vector similarity:
+
+```python
+rows = await (
+    client.search(Doc)
+    .search_hybrid(
+        "body", "vector index",       # text field + query
+        "embedding", q,                # vector field + query vector
+        weights=(0.5, 0.5),
+        fusion="weighted_sum",
+        top_k=10,
+    )
+    .all()
+)
+```
+
+Fusion modes:
+
+- `weighted_sum` — min-max normalize each signal to `[0, 1]`, then `w_text·t + w_vector·v`.
+- `reciprocal_rank_fusion` — combine `weight / (60 + rank)` over each signal's ranking.
+
+Weights must be non-negative and not both zero. Hybrid search is single-node
+production-supported; when issued through a multi-node cluster it follows AuraDB's preview
+semantics.
+
+## Result scores
+
+```python
+from aura import search_scores
+
+for row in rows:
+    s = search_scores(row)
+    print(s.rank, s.score, s.text_score, s.vector_score)
+```
+
+- `score` — the primary (or fused) score.
+- `text_score` / `vector_score` — component scores for hybrid results.
+- `rank` — 1-based position in the ranked result set.
+
+## Capability negotiation
+
+Search queries are checked against the backend's capabilities before execution. If a backend
+does not support a requested feature, the connector raises `AuraCapabilityError` rather than
+silently emulating or dropping it:
+
+```python
+caps = client.capabilities()
+caps.supports("full_text_search")   # True for AuraDB native + memory
+caps.supports("hybrid_search")
+caps.supports("vector_search")
+```
+
+The AuraDB native backend and the in-memory reference backend implement BM25 and hybrid
+search. SQL, MongoDB, and Redis backends raise a capability error for ranked-search clauses.
+
+**Server-aware negotiation.** Against the native AuraDB backend, the connector reads the
+server's advertised capabilities at handshake. If you connect to an AuraDB server that
+predates v1.1.0 (no BM25 or hybrid support), `client.capabilities()` reflects that — a
+`search_text` or `search_hybrid` call then raises `AuraCapabilityError` instead of sending a
+clause the older server would silently ignore. `client.capabilities()` is therefore the
+authoritative source for what the connected server supports; `AuraCapabilityError.context`
+carries the backend name and the missing capability so callers can branch on it.
+
+The error is also raised for unsupported backends (SQL/Mongo/Redis), and the message names
+the backend — see `examples/auradb_search_capabilities.py` and
+`examples/auradb_search_errors.py`.

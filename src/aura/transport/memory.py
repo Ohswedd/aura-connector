@@ -209,7 +209,7 @@ class ReferenceServer:
 
         scored = self._apply_search(ir, rows)
 
-        if "vector" not in ir and "text" not in ir:
+        if not _is_ranked(ir):
             scored = self._apply_order(ir.get("sort", []), scored)
 
         offset = ir.get("offset")
@@ -219,7 +219,11 @@ class ReferenceServer:
         if limit is not None:
             scored = scored[:limit]
 
-        result_rows = [self._project(model, store, ir, row, score) for row, score in scored]
+        ranked = _is_ranked(ir)
+        result_rows = [
+            self._project(model, store, ir, row, bundle, (idx + (offset or 0)) if ranked else None)
+            for idx, (row, bundle) in enumerate(scored)
+        ]
 
         cursor_request = ir.get("cursor")
         if cursor_request:
@@ -360,7 +364,14 @@ class ReferenceServer:
             metadata={"model": current_model},
         )
 
-    def _apply_search(self, ir: dict[str, Any], rows: list[Row]) -> list[tuple[Row, float | None]]:
+    def _apply_search(
+        self, ir: dict[str, Any], rows: list[Row]
+    ) -> list[tuple[Row, dict[str, float] | None]]:
+        if ir.get("hybrid") is not None:
+            return self._apply_hybrid(ir["hybrid"], rows)
+        if ir.get("text_search") is not None:
+            return self._apply_text_ranked(ir["text_search"], rows)
+
         vector = ir.get("vector")
         text = ir.get("text")
         if vector is None and text is None:
@@ -368,7 +379,7 @@ class ReferenceServer:
 
         fusion = ir.get("fusion", {})
         alpha = fusion.get("alpha", 1.0 if vector else 0.0)
-        scored: list[tuple[Row, float]] = []
+        scored: list[tuple[Row, dict[str, float] | None]] = []
         for row in rows:
             vscore = self._vector_score(vector, row) if vector else None
             tscore = self._text_score(text, row) if text else None
@@ -378,9 +389,134 @@ class ReferenceServer:
                 combined = alpha * vscore + (1 - alpha) * tscore
             else:
                 combined = vscore if vscore is not None else tscore
-            scored.append((row, float(combined)))
-        scored.sort(key=lambda pair: (-pair[1], self._stable_key(pair[0])))
-        return [(r, s) for r, s in scored]
+            scored.append((row, {"score": float(combined)}))
+        scored.sort(key=lambda pair: (-(pair[1] or {})["score"], self._stable_key(pair[0])))
+        return scored
+
+    def _bm25_scores(
+        self, field: str, query: str, operator: str, rows: list[Row], k1: float, b: float
+    ) -> dict[Any, float]:
+        """Compute BM25 scores over ``rows`` for ``query`` on ``field``.
+
+        Mirrors the AuraDB server's BM25+ formulation closely enough for the
+        reference engine: deterministic ordering and the same relative ranking
+        behaviour (term-frequency saturation, document-length normalization, and
+        non-negative IDF). Exact scores need not byte-match the server.
+        """
+        terms = _tokenize(query)
+        terms = sorted(set(terms))
+        if not terms:
+            return {}
+        docs: list[tuple[Any, list[str]]] = []
+        for row in rows:
+            value = row.get(field)
+            if not isinstance(value, str):
+                continue
+            docs.append((self._stable_key(row), _tokenize(value)))
+        if not docs:
+            return {}
+        n = len(docs)
+        avgdl = sum(len(toks) for _, toks in docs) / n if n else 1.0
+        avgdl = max(avgdl, 1.0)
+        df = {t: sum(1 for _, toks in docs if t in toks) for t in terms}
+        out: dict[Any, float] = {}
+        for key, toks in docs:
+            dl = len(toks)
+            matched = 0
+            score = 0.0
+            for t in terms:
+                tf = toks.count(t)
+                if tf == 0:
+                    continue
+                matched += 1
+                idf = math.log((n - df[t] + 0.5) / (df[t] + 0.5) + 1.0)
+                denom = tf + k1 * (1 - b + b * dl / avgdl)
+                score += idf * (tf * (k1 + 1.0)) / denom
+            if operator == "and" and matched < len(terms):
+                continue
+            if matched > 0:
+                out[key] = score
+        return out
+
+    def _apply_text_ranked(
+        self, ts: dict[str, Any], rows: list[Row]
+    ) -> list[tuple[Row, dict[str, float] | None]]:
+        k1 = float(ts.get("k1") or 1.2)
+        b = float(ts.get("b") or 0.75)
+        operator = ts.get("operator", "or")
+        if ts.get("rank") == "term_frequency":
+            query_terms = _tokenize(ts["query"])
+
+            def _tf(r: Row, terms: list[str] = query_terms) -> float:
+                doc = _tokenize(str(r.get(ts["field"], "")))
+                return float(sum(doc.count(t) for t in terms))
+
+            tscores = {self._stable_key(r): _tf(r) for r in rows}
+            tscores = {k: v for k, v in tscores.items() if v > 0}
+        else:
+            tscores = self._bm25_scores(ts["field"], ts["query"], operator, rows, k1, b)
+        scored: list[tuple[Row, dict[str, float] | None]] = [
+            (r, {"score": tscores[self._stable_key(r)]})
+            for r in rows
+            if self._stable_key(r) in tscores
+        ]
+        scored.sort(key=lambda pair: (-(pair[1] or {})["score"], self._stable_key(pair[0])))
+        return scored
+
+    def _apply_hybrid(
+        self, hs: dict[str, Any], rows: list[Row]
+    ) -> list[tuple[Row, dict[str, float] | None]]:
+        k1 = float(hs.get("k1") or 1.2)
+        b = float(hs.get("b") or 0.75)
+        weights = hs.get("weights", {"text": 0.5, "vector": 0.5})
+        wt = float(weights.get("text", 0.5))
+        wv = float(weights.get("vector", 0.5))
+        fusion = hs.get("fusion", "weighted_sum")
+        text = self._bm25_scores(
+            hs["text_field"], hs["text_query"], hs.get("operator", "or"), rows, k1, b
+        )
+        vec: dict[Any, float] = {}
+        vparams = {
+            "field": hs["vector_field"],
+            "query": hs["vector"],
+            "metric": hs.get("metric", "cosine"),
+        }
+        for r in rows:
+            vs = self._vector_score(vparams, r)
+            if vs is not None:
+                vec[self._stable_key(r)] = vs
+        keys = set(text) | set(vec)
+        by_key = {self._stable_key(r): r for r in rows}
+        scored: list[tuple[Row, dict[str, float] | None]] = []
+        if fusion == "reciprocal_rank_fusion":
+            text_rank = _rank_map(text)
+            vec_rank = _rank_map(vec)
+            for key in keys:
+                fused = 0.0
+                if key in text_rank:
+                    fused += wt / (60.0 + text_rank[key])
+                if key in vec_rank:
+                    fused += wv / (60.0 + vec_rank[key])
+                bundle = {"score": fused}
+                if key in text:
+                    bundle["text_score"] = text[key]
+                if key in vec:
+                    bundle["vector_score"] = vec[key]
+                scored.append((by_key[key], bundle))
+        else:
+            tmin, tmax = _min_max(text.values())
+            vmin, vmax = _min_max(vec.values())
+            for key in keys:
+                tn = _normalize(text[key], tmin, tmax) if key in text else 0.0
+                vn = _normalize(vec[key], vmin, vmax) if key in vec else 0.0
+                bundle = {"score": wt * tn + wv * vn}
+                if key in text:
+                    bundle["text_score"] = text[key]
+                if key in vec:
+                    bundle["vector_score"] = vec[key]
+                scored.append((by_key[key], bundle))
+        scored.sort(key=lambda pair: (-(pair[1] or {})["score"], self._stable_key(pair[0])))
+        return scored
 
     def _vector_score(self, vector: dict[str, Any], row: Row) -> float | None:
         field = vector["field"]
@@ -408,8 +544,8 @@ class ReferenceServer:
         return float(hits) / len(terms)
 
     def _apply_order(
-        self, sort: list[dict[str, Any]], scored: list[tuple[Row, float | None]]
-    ) -> list[tuple[Row, float | None]]:
+        self, sort: list[dict[str, Any]], scored: list[tuple[Row, dict[str, float] | None]]
+    ) -> list[tuple[Row, dict[str, float] | None]]:
         if not sort:
             return scored
         ordered = list(scored)
@@ -420,7 +556,13 @@ class ReferenceServer:
         return ordered
 
     def _project(
-        self, model: str, store: Store, ir: dict[str, Any], row: Row, score: float | None
+        self,
+        model: str,
+        store: Store,
+        ir: dict[str, Any],
+        row: Row,
+        bundle: dict[str, float] | None,
+        rank: int | None,
     ) -> Row:
         projection = ir.get("projection")
         if projection:
@@ -433,8 +575,15 @@ class ReferenceServer:
         for include in ir.get("include", []):
             self._resolve_include(model, store, row, include, out)
 
-        if score is not None:
-            out["__score__"] = score
+        if bundle is not None:
+            if bundle.get("score") is not None:
+                out["__score__"] = bundle["score"]
+            if "text_score" in bundle:
+                out["__text_score__"] = bundle["text_score"]
+            if "vector_score" in bundle:
+                out["__vector_score__"] = bundle["vector_score"]
+        if rank is not None:
+            out["__rank__"] = rank + 1
         return out
 
     def _resolve_include(
@@ -683,6 +832,51 @@ def _sort_key(value: Any) -> tuple[int, Any]:
     if value is None:
         return (0, 0)
     return (1, value)
+
+
+def _is_ranked(ir: dict[str, Any]) -> bool:
+    """Whether the query orders by a relevance/similarity score."""
+    return any(k in ir for k in ("vector", "text", "text_search", "hybrid"))
+
+
+def _tokenize(text: str) -> list[str]:
+    """Case-fold and split on non-alphanumeric boundaries (matches the server)."""
+    out: list[str] = []
+    token: list[str] = []
+    for ch in text.lower():
+        if ch.isalnum():
+            token.append(ch)
+        elif token:
+            out.append("".join(token))
+            token = []
+    if token:
+        out.append("".join(token))
+    return out
+
+
+def _rank_map(scores: dict[Any, float]) -> dict[Any, int]:
+    """1-based rank of each key by descending score (ties broken by key)."""
+    ordered = sorted(scores.items(), key=lambda kv: (-kv[1], _key_sort(kv[0])))
+    return {key: i + 1 for i, (key, _) in enumerate(ordered)}
+
+
+def _key_sort(key: Any) -> tuple[int, Any]:
+    if isinstance(key, (int, float)):
+        return (0, key)
+    return (1, str(key))
+
+
+def _min_max(values: Any) -> tuple[float, float]:
+    vals = [float(v) for v in values]
+    if not vals:
+        return (0.0, 0.0)
+    return (min(vals), max(vals))
+
+
+def _normalize(value: float, lo: float, hi: float) -> float:
+    if abs(hi - lo) < 1e-12:
+        return 1.0
+    return (value - lo) / (hi - lo)
 
 
 class MemoryTransport(Transport):
