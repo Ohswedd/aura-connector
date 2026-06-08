@@ -215,3 +215,10 @@ silently emulated.
 - [TRANSACTIONS.md](TRANSACTIONS.md) — transaction semantics and cluster-preview rules.
 - [COMPATIBILITY.md](COMPATIBILITY.md) — connector ↔ AuraDB ↔ protocol matrix.
 - `examples/auradb_leader_redirect.py` — leader discovery and safe redirect, runnable.
+
+## Search and ranking (v1.1.0)
+
+AuraDB v1.1.0 adds BM25 ranked full-text search and hybrid text+vector retrieval. The
+connector exposes these as `search_text`, `search_vector`, and `search_hybrid`; exact vector
+search remains the correctness baseline (approximate/ANN search is not implemented). See
+[SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).

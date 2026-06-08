@@ -551,9 +551,29 @@ class Client:
         raise AttributeError(name)
 
     # -- Executor implementation -------------------------------------------------
+    def _check_search_capabilities(self, ir: dict[str, Any]) -> None:
+        """Fail clearly when a query uses a search feature the backend lacks,
+        rather than silently dropping the clause or emulating it."""
+        caps = self._backend.capabilities()
+        required: list[tuple[str, str]] = []
+        if "hybrid" in ir:
+            required.append(("hybrid_search", "hybrid search"))
+        if "text_search" in ir:
+            required.append(("full_text_search", "ranked full-text search"))
+        if "vector" in ir:
+            required.append(("vector_search", "vector search"))
+        for flag, label in required:
+            if not caps.supports(flag):
+                raise AuraBackendCapabilityError(
+                    f"Backend {caps.name!r} does not support {label}",
+                    context={"backend": caps.name, "capability": flag},
+                )
+
     async def _execute(self, node: QueryNode, model: type[AuraModel], txid: int) -> QueryResult:
         self._ensure_open()
         ir = node.to_ir()
+        if node.operation == "select":
+            self._check_search_capabilities(ir)
         self._metrics.record_query(node.operation)
         if node.operation in _MUTATION_OPS:
             result = await self._backend.execute_mutation(ir, txid=txid)

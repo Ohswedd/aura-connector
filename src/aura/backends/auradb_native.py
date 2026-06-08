@@ -152,7 +152,19 @@ def _collection_schema(model: dict[str, Any]) -> dict[str, Any]:
                 "on_delete": on_delete,
             }
         )
-    return {"name": model["name"], "fields": fields, "relationships": relationships}
+    # Full-text indexes are declared per field (Field(full_text=True)) and mapped to
+    # named collection indexes so the server builds a BM25 inverted index.
+    indexes = [
+        {"path": fs["name"], "kind": "full_text"}
+        for fs in model.get("fields", [])
+        if fs.get("full_text")
+    ]
+    return {
+        "name": model["name"],
+        "fields": fields,
+        "relationships": relationships,
+        "indexes": indexes,
+    }
 
 
 def _field_path(node: dict[str, Any]) -> str:
@@ -250,6 +262,43 @@ def _translate_select(ir: dict[str, Any]) -> dict[str, Any]:
             "metric": metric,
         }
 
+    text_search = ir.get("text_search")
+    if text_search:
+        ts: dict[str, Any] = {
+            "field": text_search["field"],
+            "query": text_search["query"],
+            "operator": text_search.get("operator", "or"),
+            "rank": text_search.get("rank", "bm25"),
+        }
+        if text_search.get("k1") is not None:
+            ts["k1"] = text_search["k1"]
+        if text_search.get("b") is not None:
+            ts["b"] = text_search["b"]
+        server["text_search"] = ts
+
+    hybrid = ir.get("hybrid")
+    if hybrid:
+        weights = hybrid.get("weights", {"text": 0.5, "vector": 0.5})
+        hy: dict[str, Any] = {
+            "text_field": hybrid["text_field"],
+            "text_query": hybrid["text_query"],
+            "vector_field": hybrid["vector_field"],
+            "vector": list(hybrid.get("vector", [])),
+            "top_k": int(hybrid.get("top_k", 10)),
+            "metric": _VECTOR_METRIC.get(hybrid.get("metric", "cosine"), "cosine"),
+            "weights": {
+                "text": float(weights.get("text", 0.5)),
+                "vector": float(weights.get("vector", 0.5)),
+            },
+            "fusion": hybrid.get("fusion", "weighted_sum"),
+            "operator": hybrid.get("operator", "or"),
+        }
+        if hybrid.get("k1") is not None:
+            hy["k1"] = hybrid["k1"]
+        if hybrid.get("b") is not None:
+            hy["b"] = hybrid["b"]
+        server["hybrid"] = hy
+
     sort = ir.get("sort")
     if sort:
         server["order_by"] = [
@@ -286,6 +335,22 @@ def _decode_fields(fields: dict[str, Any]) -> dict[str, Any]:
     return {k: _decode_value(v) for k, v in fields.items()}
 
 
+def _decode_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Decode a result row's fields and surface ranked-search scores as the
+    ``__score__`` / ``__text_score__`` / ``__vector_score__`` / ``__rank__`` keys
+    the hydrator consumes."""
+    out = _decode_fields(row.get("fields", {}))
+    if row.get("score") is not None:
+        out["__score__"] = row["score"]
+    if row.get("text_score") is not None:
+        out["__text_score__"] = row["text_score"]
+    if row.get("vector_score") is not None:
+        out["__vector_score__"] = row["vector_score"]
+    if row.get("rank") is not None:
+        out["__rank__"] = row["rank"]
+    return out
+
+
 class AuraDBNativeBackend(Backend):
     """A backend that speaks AWP 1 to an AuraDB single-node server."""
 
@@ -307,6 +372,11 @@ class AuraDBNativeBackend(Backend):
         self._vector_fields: dict[str, set[str]] = {}
         # Maps the client-side transaction id to the server-assigned one.
         self._txn_map: dict[int, int] = {}
+        # The server's advertised capability names and version, learned at
+        # handshake. ``None`` until connected (capabilities() then reports the
+        # optimistic native defaults for offline use).
+        self._server_caps: set[str] | None = None
+        self._server_version: str | None = None
 
     # -- lifecycle ---------------------------------------------------------------
     def _token(self) -> str | None:
@@ -355,6 +425,18 @@ class AuraDBNativeBackend(Backend):
         opcode, ack = await self._request(Opcode.HELLO, payload)
         if opcode != Opcode.HELLO_ACK:
             raise AuraProtocolError("server did not acknowledge the handshake")
+        # Learn the server's advertised capabilities so search/ranking features can
+        # be gated on what the server actually implements (an older AuraDB server
+        # that predates BM25/hybrid does not advertise them, so the connector fails
+        # clearly instead of sending a clause the server would silently ignore).
+        server_caps = ack.get("capabilities")
+        if isinstance(server_caps, dict):
+            caps_list = server_caps.get("capabilities")
+            if isinstance(caps_list, list):
+                self._server_caps = {str(c) for c in caps_list}
+            version = server_caps.get("server_version")
+            if version is not None:
+                self._server_version = str(version)
         if ack.get("auth_required") and not ack.get("authenticated"):
             if token is None:
                 raise AuraAuthenticationError("server requires authentication; provide a token")
@@ -443,7 +525,7 @@ class AuraDBNativeBackend(Backend):
             _, page = await self._request(
                 Opcode.QUERY, {"query": "find", **_translate_select(ir)}, stxid
             )
-            rows = [_decode_fields(r["fields"]) for r in page.get("rows", [])]
+            rows = [_decode_row(r) for r in page.get("rows", [])]
             metadata: dict[str, Any] = {}
             if page.get("cursor_id") is not None:
                 metadata["cursor"] = page["cursor_id"]
@@ -570,6 +652,19 @@ class AuraDBNativeBackend(Backend):
 
     # -- introspection -----------------------------------------------------------
     def capabilities(self) -> BackendCapabilities:
+        # When connected, reflect the server's advertised capabilities so search
+        # features are gated on what the server actually implements. Before
+        # connecting (offline introspection), report the optimistic native
+        # defaults for the current AuraDB line.
+        srv = self._server_caps
+        if srv is not None:
+            # BM25 ranked text search requires the server's BM25 capability; the
+            # exact-vector and hybrid capabilities map directly.
+            full_text = "full_text_bm25_ranking" in srv
+            hybrid = "hybrid_search" in srv
+            vector = "vector_exact_search" in srv
+        else:
+            full_text = hybrid = vector = True
         return BackendCapabilities(
             name="auradb",
             transactions=True,
@@ -578,9 +673,9 @@ class AuraDBNativeBackend(Backend):
             json_fields=True,
             relationships=True,
             graph_traversal=False,
-            vector_search=True,
-            hybrid_search=False,
-            full_text_search=True,
+            vector_search=vector,
+            hybrid_search=hybrid,
+            full_text_search=full_text,
             raw_queries=False,
             explain=True,
             server_side_cursors=True,
@@ -588,3 +683,8 @@ class AuraDBNativeBackend(Backend):
             document_queries=True,
             key_value=False,
         )
+
+    def server_version(self) -> str | None:
+        """The AuraDB server version learned at handshake, or ``None`` if not yet
+        connected."""
+        return self._server_version

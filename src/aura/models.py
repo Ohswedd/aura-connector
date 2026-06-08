@@ -298,6 +298,7 @@ def _build_schema(name: str, fields: Mapping[str, FieldInfo]) -> ModelSchema:
                 primary_key=info.primary_key,
                 unique=info.unique,
                 index=info.index,
+                full_text=info.full_text,
                 container=info.container,
                 vector_dim=info.vector_dim,
                 vector_index=info.vector_index,

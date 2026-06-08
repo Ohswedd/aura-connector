@@ -229,10 +229,13 @@ async with connect(
         assert await tx.query(User).where(User.id == 1).count() == 1
 ```
 
-**Compatibility:** Aura Connector 0.4.x talks to AuraDB 0.7.x over AWP 1 (and to AuraDB 0.6.x
-single-node servers, where the cluster ergonomics simply never trigger). Aura Connector 0.2.x
-does **not** speak the authenticated, TLS-capable native AWP path. The legacy `aura://`
-schemes use the connector's bundled reference protocol path, not the AuraDB network server.
+**Compatibility:** Aura Connector 0.5.x talks to AuraDB 1.1.x over AWP 1 and adds first-class
+search and ranking APIs (`search_text` BM25, `search_vector`, `search_hybrid`); see
+[docs/SEARCH_AND_RANKING.md](docs/SEARCH_AND_RANKING.md). The new clauses are additive Query
+IR, so the protocol revision is unchanged. Aura Connector 0.4.x talks to AuraDB 0.7.x / 1.0.x.
+Aura Connector 0.2.x does **not** speak the authenticated, TLS-capable native AWP path. The
+legacy `aura://` schemes use the connector's bundled reference protocol path, not the AuraDB
+network server.
 See [docs/AURADB.md](docs/AURADB.md).
 
 **Cluster preview (experimental, opt-in):** AuraDB's multi-node mode has no production high

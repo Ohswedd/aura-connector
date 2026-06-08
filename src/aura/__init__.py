@@ -28,6 +28,7 @@ from .errors import (
     AuraAuthorizationError,
     AuraBackendCapabilityError,
     AuraBackendError,
+    AuraCapabilityError,
     AuraClientClosedError,
     AuraConnectionError,
     AuraConstraintError,
@@ -71,6 +72,7 @@ from .schema import (
     schema_document,
     schema_json,
 )
+from .scores import SearchScores, search_scores
 from .vectors import Vector
 
 #: ``Model`` is a friendly alias for :class:`AuraModel`.
@@ -97,6 +99,9 @@ __all__ = [
     "and_",
     "or_",
     "not_",
+    # search scores
+    "SearchScores",
+    "search_scores",
     # schema
     "ModelSchema",
     "schema_document",
@@ -131,6 +136,7 @@ __all__ = [
     "AuraError",
     "AuraBackendError",
     "AuraBackendCapabilityError",
+    "AuraCapabilityError",
     "AuraDialectError",
     "AuraDriverNotInstalledError",
     "AuraConnectionError",
@@ -156,4 +162,4 @@ __all__ = [
     "RelationshipNotLoadedError",
 ]
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
