@@ -306,7 +306,9 @@ class TxControl:
     """Begin/commit/rollback control message; opcode set by the sender."""
 
     action: str = "begin"
-    isolation: str = "serializable"
+    # AuraDB applies snapshot isolation with optimistic conflict detection regardless of
+    # this token; "snapshot" is the honest default and "serializable" is not claimed.
+    isolation: str = "snapshot"
 
     def to_payload(self) -> dict[str, Any]:
         return {"action": self.action, "isolation": self.isolation}
@@ -315,7 +317,7 @@ class TxControl:
     def from_payload(cls, data: dict[str, Any]) -> TxControl:
         return cls(
             action=str(data.get("action", "begin")),
-            isolation=str(data.get("isolation", "serializable")),
+            isolation=str(data.get("isolation", "snapshot")),
         )
 
 

@@ -4,8 +4,15 @@
 rolls back on any exception. Mutations and queries issued through the transaction
 run under its transaction id.
 
+AuraDB transactions provide **snapshot isolation with optimistic conflict
+detection** (first-committer-wins on commit). The connector does not upgrade
+AuraDB transactions to serializable isolation. The `isolation` argument defaults
+to `"snapshot"`; the old `"serializable"` token is accepted only as a deprecated
+compatibility alias for snapshot isolation and should not be used in new code — it
+does not change AuraDB semantics.
+
 ```python
-async with client.transaction(isolation="serializable") as tx:
+async with client.transaction(isolation="snapshot") as tx:
     await tx.insert(User(id=1, name="Ada"))
     await tx.update(User).set(name="Ada L.").where(User.id == 1)
 # committed here; any exception rolls the whole transaction back

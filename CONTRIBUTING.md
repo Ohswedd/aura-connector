@@ -66,3 +66,8 @@ enforce.
 
 Do not add `Co-authored-by` trailers unless explicitly requested by the maintainer. Keep
 commit messages clean and descriptive.
+
+## For maintainers
+
+The release process — version bump, AuraDB coordination, tagging, and PyPI publishing — is
+documented in [docs/RELEASE.md](docs/RELEASE.md).

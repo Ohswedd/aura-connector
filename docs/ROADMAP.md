@@ -1,78 +1,110 @@
-# Roadmap
+# Aura Connector Roadmap
 
-This roadmap describes where Aura Connector is headed. It is a statement of
-direction, not a delivery commitment. Items are grouped by theme and listed
-roughly in the order we expect to approach them.
+This roadmap tracks planned and candidate work for the Python connector. It is a
+statement of direction, not a delivery commitment, and it is **not a changelog**.
+Completed release history lives in [CHANGELOG.md](../CHANGELOG.md).
 
-## Current release: 0.3.0
+## Current product stance
 
-Aura Connector 0.3.0 is an async, typed Python data connector that exposes one
-model and query API across AuraDB and several existing databases. It provides
-typed models, an injection-safe query builder, first-class vector fields,
-migrations, observability, an in-memory reference backend, and an optional Rust
-native-acceleration extension with a guaranteed pure-Python fallback. Backend
-feature differences are represented honestly through the
-[backend capability matrix](BACKEND_CAPABILITY_MATRIX.md): an unsupported feature
-raises a structured error rather than being emulated. See the
-[CHANGELOG](../CHANGELOG.md) and [README](../README.md) for what is and is not
-claimed.
+This stance is the baseline the roadmap builds on; it is context, not a list of
+deliverables.
 
-## Delivered so far
+- **Aura Connector v0.5.x is the matching connector for AuraDB v1.1.x** search and
+  ranking — see [COMPATIBILITY.md](COMPATIBILITY.md).
+- **The native AuraDB backend is the primary target** — see [AURADB.md](AURADB.md).
+- **Non-AuraDB backends support a subset** of features and raise a structured
+  `AuraCapabilityError` for unsupported search / ranking — they are never silently
+  emulated. See [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).
+- **Leader redirect is opt-in and bounded**; the connector does not auto-retry
+  follower writes by default.
+- **Transactions do not auto-redirect** — transaction ids are node-local and must
+  be restarted on the leader.
 
-- **Native AuraDB backend (0.3.0).** The `auradb://` and `auradbs://` schemes
-  speak Aura Wire Protocol version 1 to a real AuraDB single-node server over TCP
-  or TLS, with static-token authentication, server-verified TLS and optional
-  mutual TLS, server-side cursor streaming, and read-your-writes transactions
-  against AuraDB v0.2.x.
-- **Multi-backend support (0.2.0).** Adapters for SQLite, PostgreSQL,
-  MySQL/MariaDB, MongoDB, and Redis, plus an in-memory reference backend, behind
-  the same typed model and query API and the backend capability matrix.
-- **Typed core.** Declarative models, a fluent injection-safe query builder,
-  vector fields, migrations, and observability (metrics and query fingerprints).
-- **Optional native acceleration.** A Rust extension for hot paths (protocol
-  checksums and vector packing) that is byte-for-byte identical to, and falls
-  back to, the pure-Python implementation.
+## How to read this roadmap
 
-## AuraDB tracking
+- `[ ]` planned / open
+- `[~]` being evaluated or under investigation
+- `[x]` completed — context only, used sparingly, never as release history
 
-- Track AuraDB server releases over the Aura Wire Protocol and keep the native
-  backend's capability advertisement aligned with the server it targets.
-- Pin golden AWP frame and Query IR fixtures shared with the AuraDB conformance
-  suite so both sides are checked against the same canonical encodings.
+Items track AuraDB server capabilities where relevant: connector search / vector
+work generally lands once the AuraDB server exposes the matching server-side
+feature.
 
-## Backends and capabilities
+## AuraDB native experience
 
-- Broaden coverage of the capability matrix per backend (for example richer
-  document-path and full-text handling where the underlying engine supports it).
-- Connection pooling and retry-policy refinements across backends.
+The native backend is the primary target; ergonomics here come first.
 
-## Query and models
+- [ ] More ergonomic schema / index declaration for search fields.
+- [ ] Better capability-introspection helpers around `client.capabilities()`.
+- [ ] More `EXPLAIN ANALYZE` helpers.
+- [ ] Richer typed score / result models.
+- [ ] Connection-profile helpers for auth and TLS.
 
-- Additional query-builder surface (more aggregation and projection shapes) where
-  it can be represented safely and uniformly across backends.
-- Continued strictness in the typed layer (mypy strict) and model validation.
+## Search and ranking APIs
 
-## Vectors and search
+BM25, hybrid, and vector search APIs ship today; these refine them and track new
+AuraDB server features.
 
-- Track approximate nearest-neighbour search on backends that gain it, while
-  keeping exact search as the correctness baseline.
-- Hybrid ranking shapes once the underlying backends expose them.
+- [ ] Search pagination helpers.
+- [~] Highlight / snippet support — only if AuraDB adds it server-side.
+- [~] Facet / aggregation APIs — only if AuraDB adds them server-side.
+- [ ] Search relevance evaluation examples.
+- [ ] Hybrid ranking presets.
+- [ ] Better validation messages for search options.
 
-## Native acceleration
+## Vector APIs
 
-- Extend the optional native extension to more hot paths where it stays a
-  transparent speed path with identical results to pure Python.
-- Prebuilt wheels for more platforms.
+Exact vector search ships today; ANN work is gated on the AuraDB server.
 
-## Ecosystem
+- [~] ANN preview API — once AuraDB supports approximate search.
+- [ ] Exact-vs-approximate comparison helpers.
+- [ ] Batch vector-query helpers.
+- [ ] Vector validation utilities.
 
-- More worked examples and backend-specific guides.
-- Expanded migration tooling.
+## Backend adapters
 
-## Non-goals (for now)
+Adapters make the same typed API useful with existing databases; they support a
+subset of AuraDB features and report the rest honestly.
 
-- Aura Connector is a client and connector library, not a database server; it
-  does not provide storage, clustering, or replication itself. Those belong to
-  the backends it talks to (AuraDB and the others).
-- Emulating a backend feature that the underlying engine does not support. The
-  capability matrix reports such features as unsupported rather than faking them.
+- [ ] Clearer capability matrix per backend.
+- [~] More SQL-backend parity where feasible.
+- [ ] Better unsupported-feature error messages.
+- [ ] Optional backend integration test matrix.
+- [ ] Keep honest capability errors — do not pretend non-AuraDB backends support
+  AuraDB-native search.
+
+## Transactions and leader routing
+
+Leader redirect is opt-in and bounded; transactions are node-local. This category
+improves the helpers around that model without weakening its safety.
+
+- [ ] More leader-discovery helpers.
+- [ ] Better retry-policy configuration.
+- [ ] More transaction-safety examples.
+- [ ] Clearer cluster-read guidance.
+
+## Developer experience
+
+- [ ] Better type-checking examples.
+- [ ] More framework integration examples.
+- [ ] Improved error documentation.
+- [ ] Better logging hooks.
+- [ ] Async lifecycle helpers.
+
+## Testing and release engineering
+
+- [ ] More live AuraDB conformance scenarios.
+- [ ] Search / ranking regression fixtures.
+- [ ] Backend-matrix CI improvements.
+- [ ] Packaging-metadata checks.
+- [ ] Executable docs examples.
+
+## Not currently planned for immediate work
+
+These are listed so the boundary is explicit. They are not promised and not
+implied by any other section.
+
+- Making all backends support every AuraDB feature.
+- Unbounded automatic cluster retries.
+- Hiding AuraDB capability errors.
+- Replacing AuraDB server-side semantics inside the connector.

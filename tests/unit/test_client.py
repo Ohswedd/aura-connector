@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from aura import AuraModel, Field
-from aura.client import Client
+from aura.client import DEFAULT_ISOLATION, Client, _normalize_isolation
 from aura.config import parse_dsn
 from aura.errors import AuraClientClosedError, AuraConnectionError, AuraQueryError
 from aura.transport.memory import MemoryTransport, ReferenceServer
@@ -149,3 +151,67 @@ async def test_telemetry_option_without_otel_is_noop() -> None:
     ) as client:
         await client.insert(Gadget(id=1, name="a"))
         assert client.metrics.snapshot()["query_count"]["insert"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# Transaction isolation: AuraDB is snapshot isolation, never serializable.    #
+# --------------------------------------------------------------------------- #
+async def test_transaction_default_is_snapshot_not_serializable() -> None:
+    # The default isolation must reflect AuraDB's actual guarantee (snapshot
+    # isolation), not overclaim serializable.
+    assert DEFAULT_ISOLATION == "snapshot"
+    client = make_client()
+    await client._open()
+    try:
+        tx = client.transaction()
+        assert tx._isolation == "snapshot"
+        assert tx._isolation != "serializable"
+    finally:
+        await client.close()
+
+
+async def test_transaction_serializable_alias_maps_to_snapshot_if_kept() -> None:
+    # The legacy "serializable" token is still accepted (no abrupt break) but is
+    # normalized to snapshot isolation; "snapshot_isolation" is a synonym too.
+    assert _normalize_isolation("serializable") == "snapshot"
+    assert _normalize_isolation("snapshot_isolation") == "snapshot"
+    assert _normalize_isolation("snapshot") == "snapshot"
+    client = make_client()
+    await client._open()
+    try:
+        tx = client.transaction(isolation="serializable")
+        assert tx._isolation == "snapshot"  # alias mapped, not propagated verbatim
+    finally:
+        await client.close()
+
+
+def test_transaction_docs_do_not_claim_serializable_isolation() -> None:
+    # No connector doc may present serializable isolation as a guarantee. Every
+    # mention of "serializable" must sit in a sentence that scopes it as a negation
+    # or a deprecated alias. Checked at sentence level so Markdown line wrapping does
+    # not split the negation away from the word.
+    repo_root = pathlib.Path(__file__).resolve().parents[2]
+    docs = [
+        repo_root / "README.md",
+        repo_root / "docs" / "TRANSACTIONS.md",
+        repo_root / "docs" / "AURADB.md",
+        repo_root / "docs" / "CLIENT.md",
+        repo_root / "docs" / "COMPATIBILITY.md",
+    ]
+    transactions = (repo_root / "docs" / "TRANSACTIONS.md").read_text()
+    assert "snapshot isolation" in transactions.lower()
+
+    scoping_terms = ("deprecat", "alias", "not serializable", "not upgrade", "does not")
+    for doc in docs:
+        # Collapse whitespace/newlines, then split into sentences so a wrapped
+        # negation ("... does not upgrade\nAuraDB transactions to serializable ...")
+        # is evaluated as one unit.
+        normalized = " ".join(doc.read_text().split())
+        for sentence in normalized.replace("`", "").split(". "):
+            low = sentence.lower()
+            if "serializable" not in low:
+                continue
+            assert any(term in low for term in scoping_terms), (
+                f"{doc.name} mentions 'serializable' without scoping it as a negation "
+                f"or deprecated alias: {sentence.strip()!r}"
+            )

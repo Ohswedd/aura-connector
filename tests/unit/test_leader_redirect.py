@@ -335,3 +335,40 @@ async def test_read_operation_can_resolve_leader_before_execution_if_helper_enab
     rows = await redirect.run(lambda: client.query(Widget).all())
     assert rows == []  # resolved against the leader, no error surfaced
     assert leader.connected is True
+
+
+# --------------------------------------------------------------------------- #
+# A5 — the snapshot-isolation default must not weaken redirect safety         #
+# --------------------------------------------------------------------------- #
+async def test_transaction_no_auto_redirect_still_holds() -> None:
+    # Regression guard for the snapshot-isolation default: a write inside a
+    # transaction that hits not_leader still propagates unchanged and the backend is
+    # never swapped behind the caller's back.
+    follower = _FollowerBackend()
+    client = _auradb_client(follower)
+    await client._open()
+    tx = client.transaction()
+    assert tx._isolation == "snapshot"  # default normalized, never "serializable"
+    with pytest.raises(AuraNotLeaderError):
+        async with tx:
+            await tx.insert(Widget(id=1, name="a"))
+    assert client.backend is follower
+    await client.close()
+
+
+async def test_transaction_search_no_auto_redirect_still_holds() -> None:
+    # A search/read inside a transaction runs against the same node; a subsequent
+    # not_leader write is not auto-redirected, even when the deprecated
+    # "serializable" alias was requested (it maps to snapshot isolation).
+    follower = _FollowerBackend()
+    client = _auradb_client(follower)
+    await client._open()
+    client.register_model(Widget)
+    tx = client.transaction(isolation="serializable")
+    assert tx._isolation == "snapshot"  # alias maps to snapshot, not propagated verbatim
+    with pytest.raises(AuraNotLeaderError):
+        async with tx:
+            assert await tx.query(Widget).all() == []  # read served by the follower
+            await tx.insert(Widget(id=1, name="a"))  # write surfaces not_leader
+    assert client.backend is follower
+    await client.close()

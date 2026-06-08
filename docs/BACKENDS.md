@@ -31,33 +31,34 @@ directly and expose no transport.
 
 ## Supported backends
 
-| Backend          | DSN schemes                                              | Driver / engine            | Notes |
+| Backend          | DSN schemes                                              | Driver / engine            | Guide |
 | ---------------- | -------------------------------------------------------- | -------------------------- | ----- |
-| AuraDB (native)  | `auradb://`, `auradbs://`                                | Aura Wire Protocol 1 (TCP/TLS) | Talks to a real **AuraDB v0.2.0** server; static-token auth and TLS; requires Aura Connector 0.3.0+ |
-| AuraDB (reference) | `aura://`, `auras://`, `aura+tcp://`                   | Aura Wire Protocol (bundled) | The connector's bundled protocol/reference path; **not** the AuraDB v0.2.0 network server |
+| AuraDB (native)  | `auradb://`, `auradbs://`                                | Aura Wire Protocol 1 (TCP/TLS) | [AURADB.md](AURADB.md) — static-token auth and TLS; requires Aura Connector 0.3.0+ |
+| AuraDB (reference) | `aura://`, `auras://`, `aura+tcp://`                   | Aura Wire Protocol (bundled) | The connector's bundled protocol/reference path; **not** the AuraDB network server |
 | Memory           | `aura+memory://`, `memory://`                            | In-process reference engine| Full feature set, no external service |
-| SQLite           | `sqlite://`, `sqlite+aiosqlite://`                       | `aiosqlite`                | First-class local backend |
-| PostgreSQL       | `postgres://`, `postgresql://`, `postgresql+asyncpg://`  | `asyncpg`                  | Production SQL |
-| MySQL / MariaDB  | `mysql://`, `mysql+aiomysql://`, `mariadb://`, `mariadb+aiomysql://` | `aiomysql`      | Production SQL |
-| MongoDB          | `mongodb://`, `mongodb+motor://`                         | `motor`                    | Document-native |
-| Redis            | `redis://`, `redis+asyncio://`                           | `redis.asyncio`            | Limited key-value / cache |
+| SQLite           | `sqlite://`, `sqlite+aiosqlite://`                       | `aiosqlite`                | [SQLITE.md](SQLITE.md) — first-class local backend |
+| PostgreSQL       | `postgres://`, `postgresql://`, `postgresql+asyncpg://`  | `asyncpg`                  | [POSTGRESQL.md](POSTGRESQL.md) |
+| MySQL / MariaDB  | `mysql://`, `mysql+aiomysql://`, `mariadb://`, `mariadb+aiomysql://` | `aiomysql`      | [MYSQL.md](MYSQL.md) |
+| MongoDB          | `mongodb://`, `mongodb+motor://`                         | `motor`                    | [MONGODB.md](MONGODB.md) — document-native |
+| Redis            | `redis://`, `redis+asyncio://`                           | `redis.asyncio`            | [REDIS.md](REDIS.md) — limited key-value / cache |
 
 AuraDB remains the native, high-performance backend: it is the only backend that speaks the
 Aura Wire Protocol and declares the `native_protocol` capability. The adapters exist so the
 connector is useful immediately with infrastructure you already run.
 
-### Native AuraDB backend (AuraDB v0.2.0)
+### Native AuraDB backend
 
-The `auradb://` and `auradbs://` schemes route to the native AuraDB backend introduced in
-Aura Connector 0.3.0. It opens its own socket, performs the AWP 1 handshake, and speaks the
-Aura Wire Protocol version 1 to a running **AuraDB v0.2.0** server — including static-token
-authentication, TLS, and transactions with read-your-writes. See [AURADB.md](AURADB.md) for
-DSNs, authentication, TLS, transaction behaviour, and the version compatibility matrix.
+The `auradb://` and `auradbs://` schemes route to the native AuraDB backend. It opens its own
+socket, performs the AWP 1 handshake, and speaks Aura Wire Protocol version 1 to a running
+AuraDB server — including static-token authentication, TLS, and transactions with
+read-your-writes. AWP 1 with auth and TLS first shipped in AuraDB v0.2.0 (the minimum native
+server version); the current coordinated server is AuraDB v1.1.0. See [AURADB.md](AURADB.md)
+for DSNs, authentication, TLS, transaction behaviour, and the version compatibility matrix.
 
 > The legacy `aura://` / `auras://` / `aura+tcp://` schemes use the connector's bundled
-> protocol/reference path and do **not** complete an AWP handshake with the AuraDB v0.2.0
-> network server. To connect to a real AuraDB v0.2.0 server, use `auradb://` (or `auradbs://`
-> for TLS) with Aura Connector 0.3.0 or newer.
+> protocol/reference path and do **not** complete an AWP handshake with the AuraDB network
+> server. To connect to a real AuraDB server, use `auradb://` (or `auradbs://` for TLS) with
+> Aura Connector 0.3.0 or newer.
 
 ## Capability differences
 
@@ -110,8 +111,8 @@ await Aura.connect("postgresql://u:p@localhost:5432/app", models=[User])
 await Aura.connect("mysql://root:pw@localhost:3306/app", models=[User])
 await Aura.connect("mongodb://localhost:27017/app", models=[User])
 await Aura.connect("redis://localhost:6379/0", models=[Session])
-await Aura.connect("auradb://db.example.com:7171/app", models=[User])  # AuraDB v0.2.0 (TCP)
-await Aura.connect("auradbs://db.example.com:7171/app", models=[User]) # AuraDB v0.2.0 (TLS)
+await Aura.connect("auradb://db.example.com:7171/app", models=[User])  # AuraDB native (TCP)
+await Aura.connect("auradbs://db.example.com:7171/app", models=[User]) # AuraDB native (TLS)
 ```
 
 Schema objects (tables, collections, indexes) for the models you pass are created on connect
