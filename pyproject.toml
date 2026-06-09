@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aura-connector"
-version = "0.5.1"
+version = "0.6.0"
 description = "Async, typed Python data connector for AuraDB and existing databases."
 readme = "README.md"
 requires-python = ">=3.11"

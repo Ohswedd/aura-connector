@@ -7,6 +7,58 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-09
+
+Paired client for AuraDB v1.2.0 (tested 1.2.0, supported 1.2.x; the 1.1.x line and older
+servers remain supported for their features). The Aura Wire Protocol (AWP 1) is unchanged.
+This release tracks AuraDB v1.2.0's query-ergonomics surface (aggregations, terms facets,
+cooperative query timeouts, stable ranked pagination).
+
+### Added
+
+- **Approximate-vector (HNSW) preview option.** `search_vector(..., approximate=True)` (or a
+  dict of `m`/`ef_construction`/`ef_search`) opts a query into AuraDB v1.2.0's HNSW preview;
+  exact search remains the default and correctness baseline. Unknown/non-positive parameters
+  raise `AuraQueryError`; a server without the `approximate_vector_search_preview` capability
+  rejects the request. Validated end-to-end against the in-memory reference engine.
+- **Facets and aggregations API.** `query.facet(field, limit=...)`, `query.aggregate_count()`,
+  `query.min(field)`, `query.max(field)`, then `await query.aggregate()` runs AuraDB v1.2.0's
+  `aggregate` request and returns a typed `AggregateResult` (`metric(op, field=None)`,
+  `facet(field)`, with `FacetResult`/`FacetBucket`/`MetricResult`). Supports filters and BM25
+  search-facet scoping (`search_text(...).facet(...)`). An empty aggregate, an empty/invalid
+  facet, or a backend without the capability raises a structured error. Validated end-to-end
+  against the in-memory reference engine.
+- **Ranked pagination helper.** `QueryBuilder.search_pages(page_size=...)` pages a ranked
+  search (`search_text` / `search_vector` / `search_hybrid`) by AuraDB v1.2.0's stable
+  `search_page` cursor tokens, yielding `SearchResultPage` objects (`rows`, `cursor`,
+  `has_more`) until the result is exhausted. Tokens are opaque and server-issued; a
+  non-ranked query is rejected, and a backend that lacks the capability raises a structured
+  error. Validated end-to-end against the in-memory reference engine.
+- **`query_timeout` error mapping.** AuraDB v1.2.0 cancels a read that exceeds its execution
+  deadline with a structured `query_timeout` error; the native backend now maps it (and
+  `transaction_timeout`) to `AuraTimeoutError`, preserving the wire code, so callers can
+  distinguish a timeout from a malformed query. The connection stays usable, matching the
+  server's cooperative cancellation.
+
+### Changed
+
+- The query builder's existing `.timeout(milliseconds)` option is now honored end-to-end:
+  AuraDB v1.2.0 enforces the `timeout_ms` the connector already emits. Against pre-1.2.0
+  servers the field is ignored as before, so no behavior changes there.
+- `__version__` and the package version are bumped to 0.6.0.
+
+### Unchanged
+
+- **Transaction isolation default remains `"snapshot"`.** The connector does not provide or
+  claim serializable isolation; the `"serializable"` token is still accepted only as a
+  deprecated compatibility alias that maps to snapshot semantics. AWP 1 is unchanged.
+
+### Not in this release (honest scope)
+
+- Production-grade ANN — the approximate-vector option drives AuraDB v1.2.0's HNSW **preview**
+  (opt-in; exact remains the baseline). (Aggregations, facets, ranked pagination, query
+  timeouts, and the approximate-vector preview option are all included this release.)
+
 ## [0.5.1] - 2026-06-09
 
 Patch over v0.5.0 that corrects the transaction isolation default label and documentation to

@@ -189,3 +189,37 @@ Scores are read with `aura.search_scores(row)` (`score`, `text_score`, `vector_s
 `rank`). Backends — and pre-1.1.0 AuraDB servers — that do not support a requested feature
 raise `AuraCapabilityError`; `client.capabilities()` reflects the connected server. See
 `examples/auradb_search_capabilities.py` and `examples/auradb_search_errors.py`.
+
+## Aggregations and facets (v0.6.0)
+
+Accumulate metrics and terms facets on a query, then run them with `await ....aggregate()`:
+
+```python
+result = (
+    await client.query(Product)
+    .filter(Product.in_stock == True)   # optional filter
+    .facet("category", limit=10)        # terms facet (top values by count)
+    .facet("brand")
+    .aggregate_count()                  # count metric
+    .min("price")                       # min / max over a numeric field
+    .max("price")
+    .aggregate()
+)
+
+result.matched                          # rows in the matched set
+result.metric("count")                  # 1234
+result.metric("min", "price")           # 5
+for bucket in result.facet("category").buckets:
+    print(bucket.value, bucket.count)   # ordered by count desc, then value asc
+```
+
+`aggregate()` returns a typed `AggregateResult` (`metric(op, field=None)` and `facet(field)`
+lookups; `FacetResult`/`FacetBucket`/`MetricResult`). A `search_text(...)` clause scopes the
+metrics and facets to the BM25 candidate set (a *search facet*). An aggregate with no facet
+or metric, an empty/invalid facet, or a backend lacking the `aggregations_and_facets`
+capability raises `AuraQueryError`/`AuraCapabilityError`.
+
+## Ranked pagination (v0.6.0)
+
+`search_text` / `search_vector` / `search_hybrid` results can be paged by stable cursor
+token with `search_pages(page_size=...)` — see [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).

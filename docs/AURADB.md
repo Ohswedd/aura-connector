@@ -223,5 +223,6 @@ silently emulated.
 
 AuraDB v1.1.0 adds BM25 ranked full-text search and hybrid text+vector retrieval. The
 connector exposes these as `search_text`, `search_vector`, and `search_hybrid`; exact vector
-search remains the correctness baseline (approximate/ANN search is not implemented). See
+search remains the default and correctness baseline (AuraDB v1.2.0 adds an opt-in
+approximate/HNSW vector preview — in-memory/rebuilt, not production ANN). See
 [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).

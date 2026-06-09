@@ -34,7 +34,7 @@ doc = Document(id=1, embedding=[0.1, 0.2, ...])   # becomes a Vector[1536]
 
 ## Similarity search
 
-The client expresses vector queries; the server performs the actual exact nearest-neighbour search (approximate/ANN search is not implemented). Supported metrics: `cosine`, `euclidean`, `dot`.
+The client expresses vector queries; the server performs the actual nearest-neighbour search. Exact search is the default and correctness baseline; against AuraDB v1.2.0 a query can opt into the approximate (HNSW) preview (not production ANN). Supported metrics: `cosine`, `euclidean`, `dot`.
 
 ```python
 matches = await (

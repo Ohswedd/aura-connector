@@ -54,9 +54,10 @@ AuraDB server features.
 
 ## Vector APIs
 
-Exact vector search ships today; ANN work is gated on the AuraDB server.
+Exact vector search ships today and remains the default and correctness baseline.
 
-- [~] ANN preview API — once AuraDB supports approximate search.
+- [x] ANN preview API — `search_vector(..., approximate=True)` opts into AuraDB v1.2.0's
+  opt-in HNSW preview (shipped in v0.6.0); not production ANN.
 - [ ] Exact-vs-approximate comparison helpers.
 - [ ] Batch vector-query helpers.
 - [ ] Vector validation utilities.

@@ -21,8 +21,10 @@ backend by changing only the DSN. AuraDB is the native, high-performance target 
 Wire Protocol; the other backends make the same model and query API useful immediately on
 existing infrastructure.
 
-**Aura Connector v0.5.0 is the matching client for AuraDB v1.1.0 search and ranking
-features** (`search_text` BM25, `search_vector`, `search_hybrid`). Feature differences between
+**Aura Connector v0.6.0 is the matching client for AuraDB v1.2.0** (query ergonomics:
+aggregations, terms facets, cooperative query timeouts), building on the v1.1.0 search and
+ranking features (`search_text` BM25, `search_vector`, `search_hybrid`). The `.timeout(ms)`
+query option is now enforced end-to-end by AuraDB v1.2.0. Feature differences between
 backends are honest: search/ranking APIs require AuraDB capabilities, and a backend that does
 not support a requested feature raises a structured capability error instead of pretending to
 support it.
@@ -161,7 +163,7 @@ See [Getting started](docs/GETTING_STARTED.md), [Models](docs/MODELS.md), and th
 
 The `auradb://` (plaintext) and `auradbs://` (TLS) schemes connect to a running AuraDB server
 over Aura Wire Protocol 1, including static-token authentication, TLS, and transactions with
-read-your-writes. AuraDB v1.1.0 is the current coordinated server; the native backend speaks
+read-your-writes. AuraDB v1.2.0 is the current coordinated server; the native backend speaks
 AWP 1, which is frozen for the AuraDB v1 line.
 
 ```python
@@ -187,9 +189,10 @@ the connector's bundled reference protocol path, not the AuraDB network server. 
 
 ## Search and ranking
 
-Against AuraDB v1.1.x (and the in-memory reference backend), the connector exposes first-class
-ranked search. Exact vector search is the correctness baseline; approximate (ANN/HNSW) search
-is not implemented.
+Against AuraDB v1.1.x and later (and the in-memory reference backend), the connector exposes
+first-class ranked search. Exact vector search is the default and correctness baseline;
+against AuraDB v1.2.0 the connector can opt a vector query into the approximate (HNSW)
+preview (`search_vector(..., approximate=True)`) — not production ANN.
 
 ```python
 from aura import search_scores

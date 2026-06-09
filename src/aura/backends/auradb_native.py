@@ -30,6 +30,7 @@ from ..errors import (
     AuraQueryError,
     AuraSchemaError,
     AuraServerError,
+    AuraTimeoutError,
 )
 from ..protocol.awp1 import (
     HEADER_LEN,
@@ -58,6 +59,11 @@ _SERVER_ERROR_MAP: dict[str, type[AuraError]] = {
     "conflict": AuraConstraintError,
     "schema_violation": AuraConstraintError,
     "invalid_request": AuraQueryError,
+    # A read cancelled for exceeding its deadline (AuraDB v1.2.0). Surfaced as a
+    # timeout so callers can distinguish it from a malformed query; the
+    # connection stays usable, matching the server's cooperative cancellation.
+    "query_timeout": AuraTimeoutError,
+    "transaction_timeout": AuraTimeoutError,
     "not_leader": AuraNotLeaderError,
     "protocol": AuraProtocolError,
     "corruption": AuraServerError,
@@ -261,6 +267,10 @@ def _translate_select(ir: dict[str, Any]) -> dict[str, Any]:
             "k": int(ir.get("limit") or 10),
             "metric": metric,
         }
+        # Opt-in approximate (HNSW) preview parameters ride alongside the clause.
+        vector_ann = ir.get("vector_ann")
+        if vector_ann is not None:
+            server["vector_ann"] = dict(vector_ann)
 
     text_search = ir.get("text_search")
     if text_search:
@@ -547,6 +557,42 @@ class AuraDBNativeBackend(Backend):
             }
             _, result = await self._request(Opcode.QUERY, payload, stxid)
             return BackendResult(count=1 if result["exists"] else 0)
+        if op == "search_page":
+            # Page a ranked search by stable cursor token (AuraDB v1.2.0). The
+            # select IR is translated to a server FindQuery and wrapped in the
+            # additive `search_page` read request; the response carries the next
+            # page's cursor token.
+            find = _translate_select(ir)
+            sp_request = {
+                "query": "search_page",
+                "find": find,
+                "page_size": int(ir["page_size"]),
+            }
+            if ir.get("cursor") is not None:
+                sp_request["cursor"] = ir["cursor"]
+            _, result = await self._request(Opcode.QUERY, sp_request, stxid)
+            rows = [_decode_row(r) for r in result.get("rows", [])]
+            metadata = {"next_cursor": result.get("next_cursor")}
+            return BackendResult(rows=rows, count=len(rows), metadata=metadata)
+        if op == "aggregate":
+            # Aggregations (count/min/max) and terms facets (AuraDB v1.2.0). The
+            # translated select supplies the collection / filter / search scope;
+            # the structured result is returned under metadata["aggregate"].
+            find = _translate_select(ir)
+            agg_request: dict[str, Any] = {
+                "query": "aggregate",
+                "collection": ir["model"],
+                "facets": list(ir.get("facets", [])),
+                "metrics": list(ir.get("metrics", [])),
+            }
+            if find.get("filter") is not None:
+                agg_request["filter"] = find["filter"]
+            if find.get("text_search") is not None:
+                agg_request["text_search"] = find["text_search"]
+            _, result = await self._request(Opcode.QUERY, agg_request, stxid)
+            return BackendResult(
+                count=int(result.get("matched", 0)), metadata={"aggregate": result}
+            )
         raise AuraBackendCapabilityError(f"auradb backend does not support read operation {op!r}")
 
     async def execute_mutation(self, ir: dict[str, Any], *, txid: int = 0) -> BackendResult:
