@@ -107,6 +107,21 @@ def test_translate_select_text_becomes_contains_text():
     assert server["filter"] == {"type": "contains_text", "field": "body", "query": "alpha"}
 
 
+def test_translate_select_forwards_query_timeout():
+    # Regression: the per-query deadline set by QueryBuilder.timeout(ms) must reach
+    # the wire FindQuery (and, via the same translation, a SearchPage's nested find)
+    # so AuraDB actually enforces it. Previously timeout_ms was dropped here, so
+    # `.timeout()` was silently ignored against the AuraDB backend.
+    ir = {"operation": "select", "model": "Article", "timeout_ms": 250}
+    server = _translate_select(ir)
+    assert server["timeout_ms"] == 250
+
+
+def test_translate_select_omits_timeout_when_unset():
+    server = _translate_select({"operation": "select", "model": "Article"})
+    assert "timeout_ms" not in server
+
+
 def test_decode_fields_unwraps_vector():
     assert _decode_fields({"embedding": {"$vector": [1.0, 2.0]}, "n": 3}) == {
         "embedding": [1.0, 2.0],
