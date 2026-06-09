@@ -322,6 +322,12 @@ def _translate_select(ir: dict[str, Any]) -> dict[str, Any]:
         server["projection"] = list(ir["projection"])
     if ir.get("include"):
         server["includes"] = [inc["link"] for inc in ir["include"]]
+    # Per-query cooperative deadline. AuraDB enforces `timeout_ms` on Find and
+    # SearchPage reads (the server clamps it against its configured maximum);
+    # forwarding it here is what makes `QueryBuilder.timeout(ms)` take effect
+    # over the wire rather than being silently dropped.
+    if ir.get("timeout_ms") is not None:
+        server["timeout_ms"] = int(ir["timeout_ms"])
     return server
 
 
@@ -589,6 +595,8 @@ class AuraDBNativeBackend(Backend):
                 agg_request["filter"] = find["filter"]
             if find.get("text_search") is not None:
                 agg_request["text_search"] = find["text_search"]
+            if find.get("timeout_ms") is not None:
+                agg_request["timeout_ms"] = find["timeout_ms"]
             _, result = await self._request(Opcode.QUERY, agg_request, stxid)
             return BackendResult(
                 count=int(result.get("matched", 0)), metadata={"aggregate": result}

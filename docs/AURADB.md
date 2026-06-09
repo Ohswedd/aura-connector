@@ -5,8 +5,19 @@ The **native AuraDB backend** speaks the Aura Wire Protocol version 1 (AWP 1) to
 performs the AWP handshake (with optional static-token authentication), translates the
 connector's canonical Query IR to the server's Query IR, and decodes results back into your
 typed models. AWP 1 with auth and TLS first shipped in AuraDB v0.2.0, so **v0.2.0 is the
-minimum native server version**; the current coordinated server is AuraDB v1.1.0 (see
+minimum native server version**; the current coordinated server is AuraDB v1.2.1 (see
 [COMPATIBILITY.md](COMPATIBILITY.md)).
+
+This connector release (v0.6.1) is a conformance and documentation hardening release over
+v0.6.0: v0.6.0 introduced the vector and query ergonomics surface (aggregations, terms
+facets, ranked pagination, cooperative query timeouts, opt-in HNSW preview), and v0.6.1
+adds no API or behavior changes beyond forwarding the per-query `timeout_ms` to the wire so
+`.timeout(ms)` is enforced by AuraDB v1.2.x. Facets, aggregations, ranked pagination, and
+query timeouts require AuraDB v1.2.x capabilities; a backend that cannot serve a requested
+feature raises `AuraCapabilityError` rather than pretending to support it. The default
+transaction isolation remains `snapshot`. AuraDB v1.2.1 ships live over-the-wire conformance
+scripts (facets/aggregations, ranked pagination, query timeouts, and cluster variants) that
+exercise this connector against a running server.
 
 The same typed model and query API you use with every other backend works unchanged — only
 the DSN changes.

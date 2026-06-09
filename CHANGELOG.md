@@ -7,6 +7,52 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-09
+
+Paired client for AuraDB v1.2.1 (tested 1.2.1, supported 1.2.x; the 1.1.x line and older
+servers remain supported for their features). A **conformance and documentation hardening**
+release over v0.6.0. It adds **no** new API; its one functional change is a narrow bug fix
+(below) surfaced by the new live conformance coverage. The Aura Wire Protocol (AWP 1) is
+unchanged.
+
+### Fixed
+
+- **Per-query `timeout_ms` is now forwarded to the AuraDB wire.** `QueryBuilder.timeout(ms)`
+  set the deadline in the client Query IR, but the AuraDB (native) backend dropped it when
+  translating Find / SearchPage / Aggregate reads, so `.timeout(ms)` was silently ignored
+  against an AuraDB server and the documented end-to-end enforcement did not actually happen.
+  The backend now forwards `timeout_ms`, so AuraDB v1.2.x enforces the per-query deadline
+  cooperatively and an over-budget read returns `AuraTimeoutError`. The in-memory reference
+  backend and pre-1.2.0 servers are unaffected. Regression-tested in
+  `tests/unit/test_auradb_native.py`.
+
+### Changed
+
+- `__version__` and the package version are bumped to 0.6.1.
+
+### Documentation
+
+- Clarified the v0.6.0 → v0.6.1 relationship: v0.6.0 introduced the vector and query
+  ergonomics surface (aggregations, terms facets, ranked pagination, cooperative query
+  timeouts, opt-in HNSW preview); v0.6.1 hardens conformance and documentation only.
+- Documented the live over-the-wire conformance coverage for those features. AuraDB v1.2.1
+  ships connector-driven conformance scripts (facets/aggregations, ranked pagination, query
+  timeouts, and cluster variants) that exercise this connector against a running server; see
+  [`docs/AURADB.md`](docs/AURADB.md) and [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
+- Reiterated honest backend boundaries: facets, aggregations, ranked pagination, and query
+  timeouts require AuraDB v1.2.x capabilities, and a backend that cannot serve a requested
+  feature raises `AuraCapabilityError` rather than pretending to support it.
+
+### Unchanged
+
+- **Transaction isolation default remains `"snapshot"`.** The connector does not provide or
+  claim serializable isolation; the `"serializable"` token is still accepted only as a
+  deprecated compatibility alias that maps to snapshot semantics. AWP 1 is unchanged.
+- The entire v0.6.0 public API is carried forward unchanged, including
+  `QueryBuilder.facet`/`.aggregate`/`.search_pages`/`.timeout` and the
+  `search_vector(..., approximate=...)` HNSW preview option (exact search remains the
+  default and correctness baseline; this is not production ANN).
+
 ## [0.6.0] - 2026-06-09
 
 Paired client for AuraDB v1.2.0 (tested 1.2.0, supported 1.2.x; the 1.1.x line and older

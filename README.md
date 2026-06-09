@@ -21,10 +21,14 @@ backend by changing only the DSN. AuraDB is the native, high-performance target 
 Wire Protocol; the other backends make the same model and query API useful immediately on
 existing infrastructure.
 
-**Aura Connector v0.6.0 is the matching client for AuraDB v1.2.0** (query ergonomics:
+**Aura Connector v0.6.1 is the matching client for AuraDB v1.2.1** (query ergonomics:
 aggregations, terms facets, cooperative query timeouts), building on the v1.1.0 search and
 ranking features (`search_text` BM25, `search_vector`, `search_hybrid`). The `.timeout(ms)`
-query option is now enforced end-to-end by AuraDB v1.2.0. Feature differences between
+query option is enforced end-to-end by AuraDB v1.2.x. v0.6.1 is a conformance and
+documentation hardening release over v0.6.0: it adds no new API; its one functional change is
+a narrow bug fix — the AuraDB backend now forwards the per-query `timeout_ms` to the wire, so
+`.timeout(ms)` is actually enforced (v0.6.0 silently dropped it for the AuraDB backend). Feature
+differences between
 backends are honest: search/ranking APIs require AuraDB capabilities, and a backend that does
 not support a requested feature raises a structured capability error instead of pretending to
 support it.
