@@ -5,19 +5,19 @@ The **native AuraDB backend** speaks the Aura Wire Protocol version 1 (AWP 1) to
 performs the AWP handshake (with optional static-token authentication), translates the
 connector's canonical Query IR to the server's Query IR, and decodes results back into your
 typed models. AWP 1 with auth and TLS first shipped in AuraDB v0.2.0, so **v0.2.0 is the
-minimum native server version**; the current coordinated server is AuraDB v1.2.1 (see
+minimum native server version**; the current coordinated server is AuraDB v1.3.0 (see
 [COMPATIBILITY.md](COMPATIBILITY.md)).
 
-This connector release (v0.6.1) is a conformance and documentation hardening release over
-v0.6.0: v0.6.0 introduced the vector and query ergonomics surface (aggregations, terms
-facets, ranked pagination, cooperative query timeouts, opt-in HNSW preview), and v0.6.1
-adds no API or behavior changes beyond forwarding the per-query `timeout_ms` to the wire so
-`.timeout(ms)` is enforced by AuraDB v1.2.x. Facets, aggregations, ranked pagination, and
-query timeouts require AuraDB v1.2.x capabilities; a backend that cannot serve a requested
-feature raises `AuraCapabilityError` rather than pretending to support it. The default
-transaction isolation remains `snapshot`. AuraDB v1.2.1 ships live over-the-wire conformance
-scripts (facets/aggregations, ranked pagination, query timeouts, and cluster variants) that
-exercise this connector against a running server.
+This connector release (v0.7.0) is the paired client for AuraDB v1.3.0. It adds, additively
+and backward compatibly, the v1.3 query ergonomics on top of the v0.6 surface (aggregations,
+terms facets, ranked pagination, cooperative query timeouts, the opt-in HNSW preview):
+group-by aggregation (`group_by`), approximate-vector (HNSW) preview options including a
+`fallback` policy (`HnswOptions`), a best-effort query profile (`profile()` / `QueryProfile`),
+and public ranked-search cursor resume (`Page`/`SearchPage`, `client.resume_search`,
+`builder.page`). Each v1.3 feature is gated on a capability flag — `group_by`, `query_profile`,
+`hnsw_preview`, `cursor_resume` — that the native backend negotiates at handshake; a server
+that does not advertise a capability gets an `AuraCapabilityError` rather than a silently-wrong
+result. The default transaction isolation remains `snapshot`.
 
 The same typed model and query API you use with every other backend works unchanged — only
 the DSN changes.
@@ -235,5 +235,16 @@ silently emulated.
 AuraDB v1.1.0 adds BM25 ranked full-text search and hybrid text+vector retrieval. The
 connector exposes these as `search_text`, `search_vector`, and `search_hybrid`; exact vector
 search remains the default and correctness baseline (AuraDB v1.2.0 adds an opt-in
-approximate/HNSW vector preview — in-memory/rebuilt, not production ANN). See
+approximate/HNSW vector preview — in-memory/rebuilt, not large-scale ANN). AuraDB v1.3.0 adds
+`HnswOptions` (HNSW preview parameters plus an `"exact"`/`"error"` fallback policy) and public
+cursor resume (`Page`/`SearchPage`, `client.resume_search`, `builder.page`). See
 [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).
+
+## Aggregations, group-by, and query profile (v1.2.0 / v1.3.0)
+
+`client.query(Model).facet(...).aggregate_count().min(...).max(...).aggregate()` returns a
+typed `AggregateResult` (AuraDB v1.2.0). AuraDB v1.3.0 adds group-by aggregation
+(`group_by(field, limit=...)`, surfaced as `AggregateResult.groups` / `GroupByResult`) and a
+best-effort query profile (`profile()`, surfaced as `AggregateResult.profile` / `QueryProfile`;
+every field is advisory and optional). Each is gated on the `group_by` / `query_profile`
+capability. See [QUERY_BUILDER.md](QUERY_BUILDER.md).

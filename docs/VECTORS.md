@@ -34,7 +34,7 @@ doc = Document(id=1, embedding=[0.1, 0.2, ...])   # becomes a Vector[1536]
 
 ## Similarity search
 
-The client expresses vector queries; the server performs the actual nearest-neighbour search. Exact search is the default and correctness baseline; against AuraDB v1.2.0 a query can opt into the approximate (HNSW) preview (not production ANN). Supported metrics: `cosine`, `euclidean`, `dot`.
+The client expresses vector queries; the server performs the actual nearest-neighbour search. Exact search is the default and correctness baseline; against AuraDB v1.2.0+ a query can opt into the approximate (HNSW) preview (not large-scale ANN). Supported metrics: `cosine`, `euclidean`, `dot`.
 
 ```python
 matches = await (
@@ -46,6 +46,24 @@ matches = await (
 for m in matches:
     print(m.title, m.__score__)   # score metadata attached during hydration
 ```
+
+### Approximate (HNSW) preview options (v0.7.0)
+
+`search_vector(..., approximate=...)` opts into the approximate (HNSW) preview. Pass `True` for
+the server defaults, a dict, or a typed `HnswOptions` (v0.7.0 / AuraDB v1.3.0) carrying the
+index/search parameters plus a `fallback` policy:
+
+```python
+from aura import HnswOptions
+
+opts = HnswOptions(m=16, ef_construction=200, ef_search=64, fallback="exact")
+rows = await client.search(Document).search_vector("embedding", q, top_k=10, approximate=opts).all()
+```
+
+`fallback="exact"` (the default) runs exact search when a request falls below the server's HNSW
+threshold; `fallback="error"` returns a structured error instead. The options take effect only
+on a server advertising the `hnsw_preview` capability; exact search remains the baseline. See
+[SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md) for details.
 
 Field-level distance expressions are also available for advanced predicates:
 

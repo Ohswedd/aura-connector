@@ -578,7 +578,12 @@ class AuraDBNativeBackend(Backend):
                 sp_request["cursor"] = ir["cursor"]
             _, result = await self._request(Opcode.QUERY, sp_request, stxid)
             rows = [_decode_row(r) for r in result.get("rows", [])]
+            # The page may also carry items (an alias of rows) and an optional total.
+            if not result.get("rows") and result.get("items"):
+                rows = [_decode_row(r) for r in result.get("items", [])]
             metadata = {"next_cursor": result.get("next_cursor")}
+            if result.get("total") is not None:
+                metadata["total"] = result["total"]
             return BackendResult(rows=rows, count=len(rows), metadata=metadata)
         if op == "aggregate":
             # Aggregations (count/min/max) and terms facets (AuraDB v1.2.0). The
@@ -597,6 +602,21 @@ class AuraDBNativeBackend(Backend):
                 agg_request["text_search"] = find["text_search"]
             if find.get("timeout_ms") is not None:
                 agg_request["timeout_ms"] = find["timeout_ms"]
+            # AuraDB v1.3.0 additive aggregate options: group-by and best-effort
+            # profiling ride on the same request when requested.
+            if ir.get("group_by") is not None:
+                # AuraDB's wire shape is a scalar ``group_by`` field name plus a
+                # separate ``group_limit`` (not a nested object), so map the
+                # connector's {field, limit} IR onto those two keys.
+                gb = ir["group_by"]
+                if isinstance(gb, dict):
+                    agg_request["group_by"] = gb["field"]
+                    if gb.get("limit") is not None:
+                        agg_request["group_limit"] = gb["limit"]
+                else:
+                    agg_request["group_by"] = gb
+            if ir.get("profile"):
+                agg_request["profile"] = True
             _, result = await self._request(Opcode.QUERY, agg_request, stxid)
             return BackendResult(
                 count=int(result.get("matched", 0)), metadata={"aggregate": result}
@@ -717,8 +737,17 @@ class AuraDBNativeBackend(Backend):
             full_text = "full_text_bm25_ranking" in srv
             hybrid = "hybrid_search" in srv
             vector = "vector_exact_search" in srv
+            # AuraDB v1.3.0 additive features. Gate each on the server's advertised
+            # capability so an older server (which does not advertise them) is
+            # reported honestly and the connector fails clearly rather than sending
+            # a clause the server would reject or ignore.
+            group_by = "group_by_aggregation" in srv
+            query_profile = "query_profile" in srv
+            hnsw_preview = "approximate_vector_search" in srv
+            cursor_resume = "ranked_search_cursor" in srv
         else:
             full_text = hybrid = vector = True
+            group_by = query_profile = hnsw_preview = cursor_resume = True
         return BackendCapabilities(
             name="auradb",
             transactions=True,
@@ -736,6 +765,10 @@ class AuraDBNativeBackend(Backend):
             native_protocol=True,
             document_queries=True,
             key_value=False,
+            group_by=group_by,
+            query_profile=query_profile,
+            hnsw_preview=hnsw_preview,
+            cursor_resume=cursor_resume,
         )
 
     def server_version(self) -> str | None:

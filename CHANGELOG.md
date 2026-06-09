@@ -7,6 +7,71 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-09
+
+Paired client for AuraDB v1.3.0. An **additive, backward-compatible** release that surfaces
+the server's v1.3.0 query-ergonomics additions: group-by aggregation, approximate-vector
+(HNSW) preview options including a fallback policy, a best-effort query profile, and public
+ranked-search cursor resume. The Aura Wire Protocol (AWP 1) is unchanged, and the connector
+stays compatible with the 1.2.x line and older servers for their features.
+
+> Transaction isolation remains **snapshot**. The connector does not provide or claim
+> serializable isolation; `"serializable"` is accepted only as a deprecated alias mapped to
+> snapshot semantics.
+
+### Added
+
+- **Group-by aggregation.** `query.group_by(field, limit=...)` groups an `.aggregate()` query
+  by a scalar field and computes its metrics per group. The result carries a typed
+  `GroupByResult` (with `AggregateGroup` entries) on `AggregateResult.groups`, ordered
+  count-descending then key-ascending, exposing `group_count_total`/`group_limit` and a
+  `truncated` flag. New public types `GroupByResult` and `AggregateGroup`. Gated on the
+  backend's `group_by` capability.
+- **Approximate-vector (HNSW) preview options.** New `HnswOptions` dataclass (`m`,
+  `ef_construction`, `ef_search`, and a `fallback` of `"exact"` (default) or `"error"`),
+  accepted by `search_vector(..., approximate=HnswOptions(...))` alongside the existing
+  `True`/dict forms. The dict form also accepts `fallback`. Exact search remains the default
+  and correctness baseline; gated on the `hnsw_preview` capability.
+- **Best-effort query profile.** `query.profile()` opts a read into an advisory `QueryProfile`
+  the server attaches to the result metadata when it can (planning/execution timing, rows
+  scanned/matched, search/vector mode, and more). Every field is optional. New public type
+  `QueryProfile` on `AggregateResult.profile`. Gated on the `query_profile` capability when
+  explicitly requested.
+- **Public ranked-search cursor resume.** New public `Page[T]` (alias `SearchPage`) with
+  `items`/`next_cursor`/`has_more`/`total`. `client.resume_search(search, cursor, page_size=...)`
+  and `builder.page(page_size=..., cursor=...)` fetch a single ranked-search page and return an
+  opaque resume token an application can persist and resume from later — across processes.
+  Works for BM25, hybrid, exact vector, and the approximate-vector preview. The token stays
+  opaque; gated on the `cursor_resume` capability.
+- **Capability flags.** `group_by`, `query_profile`, `hnsw_preview`, and `cursor_resume` added
+  to `BackendCapabilities` (default `False`); advertised by the AuraDB native and in-memory
+  reference backends. The native backend gates each on what a connected server advertises.
+- **Examples.** `examples/auradb_group_by.py`, `examples/auradb_query_profile.py`,
+  `examples/auradb_cursor_resume.py`, and `examples/auradb_ann_preview.py` (smoke-tested
+  against the in-memory reference engine).
+
+### Changed
+
+- `__version__` and the package version are bumped to 0.7.0.
+- `MetricResult` and the aggregate metric computation accept `avg` (yielding a float, or
+  `null`) in addition to `count`/`min`/`max`, matching the v1.3.0 per-group metrics.
+
+### Compatibility
+
+- Drop-in over v0.6.x. All new API is additive; result models parse both old responses (new
+  fields absent) and new responses. No existing behavior changes.
+
+### Known limitations (honest scope)
+
+- The approximate-vector option drives AuraDB's HNSW **preview** (opt-in; exact vector search
+  remains the default and correctness baseline) — no high-availability or large-scale ANN
+  claim is implied.
+- Query-profile fields are advisory and best-effort: any or all may be absent, and an older
+  server omits the profile entirely. They are diagnostics, not a stable contract.
+- The cursor resume token is opaque and never parsed by the connector; its lifetime is bounded
+  by the server, so resume promptly. For BM25/hybrid stability under concurrent writes, page
+  inside a snapshot transaction.
+
 ## [0.6.1] - 2026-06-09
 
 Paired client for AuraDB v1.2.1 (tested 1.2.1, supported 1.2.x; the 1.1.x line and older

@@ -19,6 +19,7 @@ from .backends.base import Backend, BackendResult
 from .config import ClientConfig
 from .errors import (
     AuraBackendCapabilityError,
+    AuraCapabilityError,
     AuraClientClosedError,
     AuraConnectionError,
     AuraNotLeaderError,
@@ -36,6 +37,7 @@ from .query.ast import InsertQuery, QueryNode, RawQuery, UpsertQuery
 from .query.builder import (
     AggregateResult,
     DeleteBuilder,
+    Page,
     QueryBuilder,
     QueryResult,
     SearchResultPage,
@@ -178,6 +180,11 @@ class _BoundExecutor:
 
     async def aggregate(self, node: QueryNode, model: type[AuraModel]) -> AggregateResult:
         return await self._client._aggregate(node, model, self._txid)
+
+    async def resume_page(
+        self, node: QueryNode, model: type[AuraModel], page_size: int, cursor: str | None
+    ) -> Page[Any]:
+        return await self._client._resume_page(node, model, page_size, cursor, self._txid)
 
 
 class Client:
@@ -351,6 +358,27 @@ class Client:
     def search(self, model: type[AuraModel]) -> QueryBuilder:
         """Alias of :meth:`query` for vector/hybrid search readability."""
         return self.query(model)
+
+    async def resume_search(
+        self, search: QueryBuilder, cursor: str, *, page_size: int = 50
+    ) -> Page[Any]:
+        """Resume a ranked search from an externally-held opaque ``cursor`` token.
+
+        ``search`` is the same ranked builder (``search_text``/``search_vector``
+        including the approximate preview/``search_hybrid``) that produced the
+        token; ``cursor`` is a ``next_cursor`` from an earlier :class:`Page` (for
+        example one persisted across processes). Returns the next :class:`Page`.
+
+        The token is opaque and forwarded verbatim — never parse it — and its
+        lifetime is bounded by the server, so resume promptly. For BM25 and hybrid
+        results that must stay stable under concurrent writes, run the original
+        search and the resume inside the same snapshot transaction. Raises
+        :class:`~aura.AuraCapabilityError` on a backend without ``cursor_resume``.
+        """
+        self.register_model(search.model)
+        if not isinstance(cursor, str) or not cursor:
+            raise AuraQueryError("resume_search requires a non-empty opaque cursor token")
+        return await self._resume_page(search.query, search.model, page_size, cursor, 0)
 
     def traverse(self, model: type[AuraModel]) -> TraverseBuilder:
         self.register_model(model)
@@ -727,15 +755,89 @@ class Client:
         base_ir = node.to_ir()
         facets = list(getattr(node, "facets", ()))
         metrics = list(getattr(node, "metrics", ()))
-        if not facets and not metrics:
-            raise AuraQueryError("aggregate() requires at least one facet or metric")
-        agg_ir = {**base_ir, "operation": "aggregate", "facets": facets, "metrics": metrics}
+        group_by = getattr(node, "group_by", None)
+        profile = bool(getattr(node, "profile", False))
+        if not facets and not metrics and group_by is None:
+            raise AuraQueryError("aggregate() requires at least one facet, metric, or group_by")
+        if group_by is not None:
+            self._require_capability("group_by", "group-by aggregation")
+        if profile:
+            self._require_capability("query_profile", "query profiling")
+        agg_ir: dict[str, Any] = {
+            **base_ir,
+            "operation": "aggregate",
+            "facets": facets,
+            "metrics": metrics,
+        }
+        if group_by is not None:
+            agg_ir["group_by"] = group_by.to_ir()
+        if profile:
+            agg_ir["profile"] = True
         self._metrics.record_query("aggregate")
         result = await self._backend.execute_query(agg_ir, txid=txid)
         body = result.metadata.get("aggregate")
         if body is None:
             raise AuraQueryError("aggregate response did not include a result")
         return AggregateResult.from_dict(body)
+
+    def _require_capability(self, flag: str, label: str) -> None:
+        """Fail clearly when the backend lacks an explicitly requested capability.
+
+        Unknown flags (a backend whose capability matrix predates this connector)
+        are treated as unsupported rather than crashing, so the caller gets a clean
+        :class:`AuraCapabilityError` instead of a ``ValueError``.
+        """
+        caps = self._backend.capabilities()
+        try:
+            supported = caps.supports(flag)
+        except ValueError:
+            supported = False
+        if not supported:
+            raise AuraCapabilityError(
+                f"Backend {caps.name!r} does not support {label}",
+                context={"backend": caps.name, "capability": flag},
+            )
+
+    async def _resume_page(
+        self,
+        node: QueryNode,
+        model: type[AuraModel],
+        page_size: int,
+        cursor: str | None,
+        txid: int,
+    ) -> Page[Any]:
+        """Fetch one ranked-search page, optionally resuming from an opaque ``cursor``.
+
+        Issues a single ``search_page`` read and returns a public :class:`Page`. The
+        cursor token stays opaque (it is forwarded verbatim and never parsed). The
+        backend rejects an unsupported backend or a malformed/expired cursor with a
+        structured error, leaving the client usable.
+        """
+        self._ensure_open()
+        if page_size <= 0:
+            raise AuraQueryError("page_size must be positive")
+        self._require_capability("cursor_resume", "ranked-search cursor resume")
+        base_ir = node.to_ir()
+        if not any(k in base_ir for k in ("vector", "text_search", "hybrid")):
+            raise AuraQueryError(
+                "resume_search/page requires a ranked clause "
+                "(search_text, search_vector, or search_hybrid)"
+            )
+        page_ir: dict[str, Any] = {**base_ir, "operation": "search_page", "page_size": page_size}
+        if cursor is not None:
+            page_ir["cursor"] = cursor
+        self._metrics.record_query("search_page")
+        result = await self._backend.execute_query(page_ir, txid=txid)
+        rows = self._hydrator.hydrate_rows(model, result.rows) if result.rows else []
+        next_cursor = result.metadata.get("next_cursor")
+        total = result.metadata.get("total")
+        return Page(
+            items=rows,
+            next_cursor=str(next_cursor) if next_cursor else None,
+            total=int(total)
+            if isinstance(total, (int, float)) and not isinstance(total, bool)
+            else None,
+        )
 
     # -- mutation helpers (shared by client and transactions) --------------------
     async def _insert_obj(

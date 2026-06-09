@@ -215,11 +215,57 @@ for bucket in result.facet("category").buckets:
 
 `aggregate()` returns a typed `AggregateResult` (`metric(op, field=None)` and `facet(field)`
 lookups; `FacetResult`/`FacetBucket`/`MetricResult`). A `search_text(...)` clause scopes the
-metrics and facets to the BM25 candidate set (a *search facet*). An aggregate with no facet
-or metric, an empty/invalid facet, or a backend lacking the `aggregations_and_facets`
+metrics and facets to the BM25 candidate set (a *search facet*). An aggregate with no facet,
+metric, or `group_by`, an empty/invalid facet, or a backend lacking the `aggregations_and_facets`
 capability raises `AuraQueryError`/`AuraCapabilityError`.
 
-## Ranked pagination (v0.6.0)
+## Group-by aggregation (v0.7.0)
 
-`search_text` / `search_vector` / `search_hybrid` results can be paged by stable cursor
-token with `search_pages(page_size=...)` — see [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).
+`group_by(field, limit=...)` groups an `.aggregate()` query by a scalar field and computes its
+metrics per group (AuraDB v1.3.0):
+
+```python
+result = (
+    await client.query(Order)
+    .group_by("region")                 # group by a scalar field
+    .aggregate_count()                  # metrics are computed per group
+    .min("amount_cents")
+    .max("amount_cents")
+    .aggregate()
+)
+
+groups = result.groups                  # a GroupByResult, or None on an old server
+for group in groups.groups:             # AggregateGroup entries, count desc then key asc
+    print(group.key, group.count, group.metric("min", "amount_cents"))
+
+groups.group_count_total                # total distinct groups the server found
+groups.truncated                        # True when a `limit` clipped the result
+```
+
+`group_by` is chainable and immutable, accepts a `FieldReference` or a string, and validates
+its field and `limit`. The result rides on `AggregateResult.groups` as a typed `GroupByResult`
+(`AggregateGroup` entries, each with `key`, `count`, and a per-group `metric(op, field=None)`),
+ordered count-descending then key-ascending. Per-group metrics may include `avg` (a float, or
+`null`). A backend lacking the `group_by` capability raises `AuraCapabilityError`.
+
+## Query profile (v0.7.0)
+
+`profile()` opts a read into a best-effort, advisory `QueryProfile` the server attaches to the
+result metadata when it can (AuraDB v1.3.0):
+
+```python
+result = await client.query(Product).aggregate_count().facet("category").profile().aggregate()
+if result.profile is not None:          # None on a server that attached no profile
+    print(result.profile.rows_scanned, result.profile.rows_matched, result.profile.search_mode)
+```
+
+Every `QueryProfile` field is optional — treat the profile as a diagnostic aid, not a stable
+contract. A backend lacking the `query_profile` capability raises `AuraCapabilityError` when
+profiling is explicitly requested.
+
+## Ranked pagination (v0.6.0) and cursor resume (v0.7.0)
+
+`search_text` / `search_vector` / `search_hybrid` results can be paged by stable cursor token
+with `search_pages(page_size=...)` (the in-process loop) or resumed from an externally-held,
+opaque token with `builder.page(page_size=..., cursor=...)` / `client.resume_search(...)` — see
+[SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).

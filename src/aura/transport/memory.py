@@ -377,8 +377,11 @@ class ReferenceServer:
         (an honest scan)."""
         metrics_spec = ir.get("metrics", [])
         facets_spec = ir.get("facets", [])
-        if not metrics_spec and not facets_spec:
-            raise AuraQueryError("an aggregate query must request at least one facet or metric")
+        group_by_spec = ir.get("group_by")
+        if not metrics_spec and not facets_spec and group_by_spec is None:
+            raise AuraQueryError(
+                "an aggregate query must request at least one facet, metric, or group_by"
+            )
 
         scanned = len(rows)
         search_scoped = ir.get("text_search") is not None
@@ -388,25 +391,11 @@ class ReferenceServer:
             matched_rows = rows
         matched = len(matched_rows)
 
-        metric_results: list[dict[str, Any]] = []
-        for spec in metrics_spec:
-            op = spec.get("op")
-            if op == "count":
-                metric_results.append({"op": "count", "value": matched})
-            elif op in ("min", "max"):
-                field = spec.get("field")
-                if not field:
-                    raise AuraQueryError(f"aggregation {op!r} requires a field")
-                values = [
-                    row[field]
-                    for row in matched_rows
-                    if isinstance(row.get(field), (int, float))
-                    and not isinstance(row.get(field), bool)
-                ]
-                value = (min(values) if op == "min" else max(values)) if values else None
-                metric_results.append({"op": op, "field": field, "value": value})
-            else:
-                raise AuraQueryError(f"unknown aggregation operator {op!r}")
+        metric_results = self._compute_metrics(metrics_spec, matched_rows)
+
+        groups_body: dict[str, Any] | None = None
+        if group_by_spec is not None:
+            groups_body = self._compute_groups(group_by_spec, metrics_spec, matched_rows)
 
         facet_results: list[dict[str, Any]] = []
         for spec in facets_spec:
@@ -426,7 +415,7 @@ class ReferenceServer:
             )[:limit]
             facet_results.append({"field": field, "used_index": False, "buckets": buckets})
 
-        body = {
+        body: dict[str, Any] = {
             "collection": model,
             "matched": matched,
             "scanned": scanned,
@@ -435,7 +424,93 @@ class ReferenceServer:
             "metrics": metric_results,
             "facets": facet_results,
         }
+        if groups_body is not None:
+            body["groups"] = groups_body
+        if ir.get("profile"):
+            # A best-effort, advisory profile (the reference engine reports the
+            # honest counters it has; timings are omitted as it does no real I/O).
+            profile: dict[str, Any] = {
+                "rows_scanned": scanned,
+                "rows_matched": matched,
+                "index_used": False,
+                "search_mode": "bm25" if search_scoped else "scan",
+                "facet_buckets": sum(len(f["buckets"]) for f in facet_results),
+            }
+            if groups_body is not None:
+                profile["groups_returned"] = len(groups_body["groups"])
+            body["profile"] = profile
         return QueryResultBody(rows=[], count=matched, metadata={"aggregate": body})
+
+    def _compute_metrics(
+        self, metrics_spec: list[dict[str, Any]], rows: list[Row]
+    ) -> list[dict[str, Any]]:
+        """Compute the count/min/max/avg metrics for one matched row set."""
+        results: list[dict[str, Any]] = []
+        for spec in metrics_spec:
+            op = spec.get("op")
+            if op == "count":
+                results.append({"op": "count", "value": len(rows)})
+            elif op in ("min", "max", "avg"):
+                field = spec.get("field")
+                if not field:
+                    raise AuraQueryError(f"aggregation {op!r} requires a field")
+                values = [
+                    row[field]
+                    for row in rows
+                    if isinstance(row.get(field), (int, float))
+                    and not isinstance(row.get(field), bool)
+                ]
+                if not values:
+                    value: Any = None
+                elif op == "min":
+                    value = min(values)
+                elif op == "max":
+                    value = max(values)
+                else:  # avg yields a float (or None)
+                    value = sum(values) / len(values)
+                results.append({"op": op, "field": field, "value": value})
+            else:
+                raise AuraQueryError(f"unknown aggregation operator {op!r}")
+        return results
+
+    def _compute_groups(
+        self,
+        group_by_spec: dict[str, Any],
+        metrics_spec: list[dict[str, Any]],
+        matched_rows: list[Row],
+    ) -> dict[str, Any]:
+        """Group the matched rows by a scalar field and compute per-group metrics.
+
+        Groups are ordered count-descending then key-ascending and capped at the
+        requested ``limit``; ``group_count_total`` reports the full distinct-group
+        count so a caller can detect truncation. Mirrors the AuraDB ``groups`` shape.
+        """
+        field = group_by_spec.get("field")
+        if not field:
+            raise AuraQueryError("group_by field must not be empty")
+        limit = int(group_by_spec.get("limit") or 50)
+        buckets: dict[Any, list[Row]] = {}
+        for row in matched_rows:
+            value = row.get(field)
+            if value is None or isinstance(value, (list, dict)):
+                continue
+            buckets.setdefault(value, []).append(row)
+        ordered_keys = sorted(buckets, key=lambda k: (-len(buckets[k]), _key_sort(k)))
+        group_count_total = len(ordered_keys)
+        groups = [
+            {
+                "key": key,
+                "count": len(buckets[key]),
+                "metrics": self._compute_metrics(metrics_spec, buckets[key]),
+            }
+            for key in ordered_keys[:limit]
+        ]
+        return {
+            "field": field,
+            "groups": groups,
+            "group_count_total": group_count_total,
+            "group_limit": limit,
+        }
 
     def _search_page(
         self, ir: dict[str, Any], model: str, store: Store, rows: list[Row]
@@ -482,8 +557,12 @@ class ReferenceServer:
             self._project(model, store, ir, row, bundle, start + idx)
             for idx, (row, bundle) in enumerate(page)
         ]
+        # The total ranked-result count is known to the reference engine, so it is
+        # reported; a real server may omit it (the connector tolerates its absence).
         return QueryResultBody(
-            rows=result_rows, count=len(result_rows), metadata={"next_cursor": next_cursor}
+            rows=result_rows,
+            count=len(result_rows),
+            metadata={"next_cursor": next_cursor, "total": len(scored)},
         )
 
     def _apply_search(

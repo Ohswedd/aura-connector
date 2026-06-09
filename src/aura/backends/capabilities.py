@@ -35,6 +35,10 @@ CAPABILITY_FLAGS: tuple[str, ...] = (
     "native_protocol",
     "document_queries",
     "key_value",
+    "group_by",
+    "query_profile",
+    "hnsw_preview",
+    "cursor_resume",
 )
 
 
@@ -64,6 +68,10 @@ class BackendCapabilities:
     native_protocol: bool = False
     document_queries: bool = False
     key_value: bool = False
+    group_by: bool = False
+    query_profile: bool = False
+    hnsw_preview: bool = False
+    cursor_resume: bool = False
 
     def supports(self, capability: str) -> bool:
         """Return whether ``capability`` (one of :data:`CAPABILITY_FLAGS`) is supported."""

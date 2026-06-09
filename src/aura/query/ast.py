@@ -17,6 +17,7 @@ __all__ = [
     "CountQuery",
     "DeleteQuery",
     "ExistsQuery",
+    "GroupBy",
     "HybridSearch",
     "Include",
     "InsertQuery",
@@ -98,6 +99,26 @@ class TextRankedSearch:
 
 
 @dataclass(frozen=True)
+class GroupBy:
+    """Group-by specification for an ``.aggregate()`` query (AuraDB v1.3.0).
+
+    Groups the matched set by a single scalar ``field`` and computes the
+    aggregate's metrics per group. ``limit`` bounds the number of returned groups
+    (the server orders them count-descending, then key-ascending); ``None`` lets
+    the server apply its default group cap.
+    """
+
+    field: str
+    limit: int | None = None
+
+    def to_ir(self) -> dict[str, Any]:
+        ir: dict[str, Any] = {"field": self.field}
+        if self.limit is not None:
+            ir["limit"] = self.limit
+        return ir
+
+
+@dataclass(frozen=True)
 class HybridSearch:
     """Hybrid text-plus-vector search parameters for `search_hybrid()`."""
 
@@ -169,6 +190,13 @@ class SelectQuery(QueryNode):
     # emitted by ``to_ir`` (the aggregate path builds its own request).
     facets: tuple[dict[str, Any], ...] = ()
     metrics: tuple[dict[str, Any], ...] = ()
+    # Optional group-by clause for an ``.aggregate()`` query (AuraDB v1.3.0). Not
+    # emitted by ``to_ir`` (the aggregate path carries it on its own request).
+    group_by: GroupBy | None = None
+    # Opt-in query-profile flag: when set, ask the server to attach a best-effort
+    # profile (planning/execution timing, rows scanned, etc.) to the result
+    # metadata. Advisory only; the server may omit any or all fields.
+    profile: bool = False
 
     def to_ir(self) -> dict[str, Any]:
         ir: dict[str, Any] = {"operation": self.operation, "model": self.model}
@@ -199,6 +227,8 @@ class SelectQuery(QueryNode):
         ir["consistency"] = self.consistency
         if self.timeout_ms is not None:
             ir["timeout_ms"] = self.timeout_ms
+        if self.profile:
+            ir["profile"] = True
         return ir
 
 
