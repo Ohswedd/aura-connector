@@ -7,6 +7,9 @@ which AuraDB server version, and over which Aura Wire Protocol (AWP) revision.
 
 | Aura Connector | AuraDB server | Protocol | Status |
 | -------------- | ------------- | -------- | ------ |
+| 0.6.x          | 1.2.x         | AWP 1    | Supported, recommended — paired with AuraDB v1.2.0's query ergonomics (aggregations, terms facets, cooperative query timeouts). `.timeout(ms)` is enforced end-to-end; `query_timeout`/`transaction_timeout` map to `AuraTimeoutError`. A connector-native facets/aggregations API is planned for a follow-up; AuraDB serves them via the additive `aggregate` read request. AWP 1 unchanged. |
+| 0.6.x          | 1.1.x         | AWP 1    | Supported for the 1.1.x feature set; `timeout_ms` is ignored by pre-1.2.0 servers (no error). |
+| 0.5.x          | 1.2.x         | AWP 1    | Supported for pre-1.2 features against a 1.2.0 server. |
 | 0.5.x          | 1.1.x         | AWP 1    | Supported — first-class search and ranking APIs (`search_text` BM25, `search_vector`, `search_hybrid`), typed scores, capability negotiation. The new clauses are additive Query IR; the wire revision is unchanged. |
 | 0.5.x          | 1.0.x         | AWP 1    | Non-search operations supported. The connector reads the server's advertised capabilities at handshake; a `search_text`/`search_hybrid` call against a pre-1.1.0 server raises `AuraCapabilityError` (the server does not advertise BM25/hybrid) rather than returning a silently-wrong result. |
 | 0.4.x          | 0.7.x / 1.0.x / 1.1.x | AWP 1 | Supported for non-search operations — cluster-preview ergonomics (`AuraNotLeaderError`, leader redirect helpers). 0.4.x predates the search APIs, so search/ranking is unavailable, but basic CRUD/transactions/vector against a 1.1.0 server work (AWP 1 unchanged). |

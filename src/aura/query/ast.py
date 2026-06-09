@@ -156,12 +156,19 @@ class SelectQuery(QueryNode):
     limit: int | None = None
     offset: int | None = None
     vector: VectorSearch | None = None
+    # Opt-in approximate (HNSW) vector-search preview parameters, set alongside a
+    # ``vector`` clause; ``None`` means exact search (the default and baseline).
+    vector_ann: dict[str, Any] | None = None
     text: TextSearch | None = None
     text_search: TextRankedSearch | None = None
     hybrid: HybridSearch | None = None
     fusion_alpha: float | None = None
     consistency: str = "strong"
     timeout_ms: int | None = None
+    # Aggregation/facet specs accumulated for an ``.aggregate()`` terminal. Not
+    # emitted by ``to_ir`` (the aggregate path builds its own request).
+    facets: tuple[dict[str, Any], ...] = ()
+    metrics: tuple[dict[str, Any], ...] = ()
 
     def to_ir(self) -> dict[str, Any]:
         ir: dict[str, Any] = {"operation": self.operation, "model": self.model}
@@ -179,6 +186,8 @@ class SelectQuery(QueryNode):
             ir["offset"] = self.offset
         if self.vector is not None:
             ir["vector"] = self.vector.to_ir()
+        if self.vector_ann is not None:
+            ir["vector_ann"] = dict(self.vector_ann)
         if self.text is not None:
             ir["text"] = self.text.to_ir()
         if self.text_search is not None:

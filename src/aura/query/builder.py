@@ -10,7 +10,8 @@ clean.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from ..errors import AuraNotFoundError, AuraQueryError
@@ -36,10 +37,15 @@ if TYPE_CHECKING:
     from ..models import AuraModel
 
 __all__ = [
+    "AggregateResult",
     "DeleteBuilder",
     "Executor",
+    "FacetBucket",
+    "FacetResult",
+    "MetricResult",
     "QueryBuilder",
     "QueryResult",
+    "SearchResultPage",
     "TraverseBuilder",
     "UpdateBuilder",
 ]
@@ -49,11 +55,110 @@ __all__ = [
 class QueryResult:
     """Uniform execution result returned by an :class:`Executor`."""
 
-    rows: list[Any] = field(default_factory=list)
+    rows: list[Any] = dc_field(default_factory=list)
     count: int | None = None
     affected: int | None = None
     request_id: int | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = dc_field(default_factory=dict)
+
+
+@dataclass
+class SearchResultPage:
+    """One page of a ranked-search pagination (:meth:`QueryBuilder.search_pages`).
+
+    ``rows`` are the hydrated models for this page (ranked order, stable
+    cross-page rank); ``cursor`` is the opaque token to fetch the next page, or
+    ``None`` when this is the last page.
+    """
+
+    rows: list[Any] = dc_field(default_factory=list)
+    cursor: str | None = None
+
+    @property
+    def has_more(self) -> bool:
+        """Whether a further page is available."""
+        return self.cursor is not None
+
+
+@dataclass(frozen=True)
+class FacetBucket:
+    """One terms-facet bucket: a distinct value and its count."""
+
+    value: Any
+    count: int
+
+
+@dataclass(frozen=True)
+class FacetResult:
+    """The buckets for one faceted field."""
+
+    field: str
+    buckets: list[FacetBucket] = dc_field(default_factory=list)
+    used_index: bool = False
+
+
+@dataclass(frozen=True)
+class MetricResult:
+    """One computed aggregation metric (``count``/``min``/``max``)."""
+
+    op: str
+    value: Any
+    field: str | None = None
+
+
+@dataclass
+class AggregateResult:
+    """The result of :meth:`QueryBuilder.aggregate`: metrics and terms facets.
+
+    ``metric(op, field=None)`` and ``facet(field)`` are convenience lookups.
+    """
+
+    collection: str = ""
+    matched: int = 0
+    scanned: int = 0
+    filter_present: bool = False
+    search_scoped: bool = False
+    metrics: list[MetricResult] = dc_field(default_factory=list)
+    facets: list[FacetResult] = dc_field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> AggregateResult:
+        return cls(
+            collection=data.get("collection", ""),
+            matched=int(data.get("matched", 0)),
+            scanned=int(data.get("scanned", 0)),
+            filter_present=bool(data.get("filter_present", False)),
+            search_scoped=bool(data.get("search_scoped", False)),
+            metrics=[
+                MetricResult(op=m["op"], value=m.get("value"), field=m.get("field"))
+                for m in data.get("metrics", [])
+            ],
+            facets=[
+                FacetResult(
+                    field=f["field"],
+                    used_index=bool(f.get("used_index", False)),
+                    buckets=[
+                        FacetBucket(value=b["value"], count=int(b["count"]))
+                        for b in f.get("buckets", [])
+                    ],
+                )
+                for f in data.get("facets", [])
+            ],
+        )
+
+    def metric(self, op: str, field: str | None = None) -> Any:
+        """The value of the metric matching ``op`` (and ``field``), or ``None``."""
+        for m in self.metrics:
+            if m.op == op and (field is None or m.field == field):
+                return m.value
+        return None
+
+    def facet(self, field: str) -> FacetResult | None:
+        """The facet result for ``field``, if requested."""
+        for f in self.facets:
+            if f.field == field:
+                return f
+        return None
 
 
 @runtime_checkable
@@ -68,6 +173,16 @@ class Executor(Protocol):
         self, node: QueryNode, model: type[AuraModel], batch_size: int
     ) -> AsyncIterator[Any]:
         """Stream hydrated rows for a select query."""
+        ...
+
+    def search_pages(
+        self, node: QueryNode, model: type[AuraModel], page_size: int
+    ) -> AsyncIterator[SearchResultPage]:
+        """Page a ranked search by stable cursor token."""
+        ...
+
+    async def aggregate(self, node: QueryNode, model: type[AuraModel]) -> AggregateResult:
+        """Compute aggregations/facets over a collection."""
         ...
 
 
@@ -223,11 +338,31 @@ class QueryBuilder:
         *,
         metric: str = "cosine",
         top_k: int = 10,
+        approximate: bool | dict[str, int] | None = None,
     ) -> QueryBuilder:
-        """Exact vector nearest-neighbour search returning the closest ``top_k``."""
+        """Vector nearest-neighbour search returning the closest ``top_k``.
+
+        Exact by default. Pass ``approximate=True`` (or a dict of HNSW
+        parameters — ``m``, ``ef_construction``, ``ef_search``) to opt into
+        AuraDB v1.2.0's approximate (HNSW) **preview** for this query; exact
+        search remains the correctness baseline. A server that does not advertise
+        the ``approximate_vector_search_preview`` capability rejects the request.
+        """
         if top_k <= 0:
             raise AuraQueryError("top_k must be positive")
-        return self.nearest(field, query_vector, metric=metric, limit=top_k)
+        builder = self.nearest(field, query_vector, metric=metric, limit=top_k)
+        if approximate is None or approximate is False:
+            return builder
+        ann: dict[str, int] = {} if approximate is True else dict(approximate)
+        allowed = {"m", "ef_construction", "ef_search"}
+        for key, value in ann.items():
+            if key not in allowed:
+                raise AuraQueryError(
+                    f"unknown approximate parameter {key!r} (allowed: {sorted(allowed)})"
+                )
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise AuraQueryError(f"approximate parameter {key!r} must be a positive integer")
+        return builder._clone(builder._replace(vector_ann=ann))
 
     def search_hybrid(
         self,
@@ -320,6 +455,68 @@ class QueryBuilder:
         if batch_size <= 0:
             raise AuraQueryError("batch_size must be positive")
         return self._executor.stream(self._query, self._model, batch_size)
+
+    def search_pages(self, *, page_size: int = 50) -> AsyncIterator[SearchResultPage]:
+        """Page a ranked search (``search_text``/``search_vector``/``search_hybrid``)
+        by stable cursor token. Yields :class:`SearchResultPage` objects until the
+        result is exhausted. Requires a ranked clause; ordinary queries should use
+        ``.all()`` or ``.stream()``."""
+        if page_size <= 0:
+            raise AuraQueryError("page_size must be positive")
+        ranked = (
+            self._query.text_search is not None
+            or self._query.vector is not None
+            or self._query.hybrid is not None
+        )
+        if not ranked:
+            raise AuraQueryError(
+                "search_pages requires a ranked clause "
+                "(search_text, search_vector, or search_hybrid)"
+            )
+        return self._executor.search_pages(self._query, self._model, page_size)
+
+    # -- v0.6.0 aggregations and facets ------------------------------------------
+    def facet(self, field: FieldReference | str, *, limit: int | None = None) -> QueryBuilder:
+        """Add a terms facet over a scalar ``field`` (top values by count) to an
+        ``.aggregate()`` query. ``limit`` bounds the buckets (default 10)."""
+        name = field.name if isinstance(field, FieldReference) else str(field)
+        if not name:
+            raise AuraQueryError("facet field must not be empty")
+        if limit is not None and limit <= 0:
+            raise AuraQueryError("facet limit must be positive")
+        spec: dict[str, Any] = {"field": name}
+        if limit is not None:
+            spec["limit"] = limit
+        return self._clone(self._replace(facets=(*self._query.facets, spec)))
+
+    def aggregate_count(self) -> QueryBuilder:
+        """Add a ``count`` metric to an ``.aggregate()`` query."""
+        return self._clone(self._replace(metrics=(*self._query.metrics, {"op": "count"})))
+
+    def min(self, field: FieldReference | str) -> QueryBuilder:
+        """Add a ``min`` metric over a numeric ``field`` to an ``.aggregate()`` query."""
+        return self._add_metric("min", field)
+
+    def max(self, field: FieldReference | str) -> QueryBuilder:
+        """Add a ``max`` metric over a numeric ``field`` to an ``.aggregate()`` query."""
+        return self._add_metric("max", field)
+
+    def _add_metric(self, op: str, field: FieldReference | str) -> QueryBuilder:
+        name = field.name if isinstance(field, FieldReference) else str(field)
+        if not name:
+            raise AuraQueryError(f"aggregation {op!r} requires a field")
+        return self._clone(self._replace(metrics=(*self._query.metrics, {"op": op, "field": name})))
+
+    async def aggregate(self) -> AggregateResult:
+        """Execute the accumulated facets/metrics as an aggregation over the
+        collection (optionally scoped by a ``search_text`` BM25 candidate set).
+        Requires at least one facet or metric."""
+        if not self._query.facets and not self._query.metrics:
+            raise AuraQueryError(
+                "aggregate() requires at least one facet or metric "
+                "(facet(...), aggregate_count(), min(...), max(...))"
+            )
+        return await self._executor.aggregate(self._query, self._model)
 
     def explain(self) -> dict[str, Any]:
         """Return the client-side Query IR."""

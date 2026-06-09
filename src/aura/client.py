@@ -34,9 +34,11 @@ from .protocol.frames import Frame
 from .protocol.opcodes import PROTOCOL_VERSION
 from .query.ast import InsertQuery, QueryNode, RawQuery, UpsertQuery
 from .query.builder import (
+    AggregateResult,
     DeleteBuilder,
     QueryBuilder,
     QueryResult,
+    SearchResultPage,
     TraverseBuilder,
     UpdateBuilder,
 )
@@ -168,6 +170,14 @@ class _BoundExecutor:
         self, node: QueryNode, model: type[AuraModel], batch_size: int
     ) -> AsyncIterator[Any]:
         return self._client._stream(node, model, batch_size, self._txid)
+
+    def search_pages(
+        self, node: QueryNode, model: type[AuraModel], page_size: int
+    ) -> AsyncIterator[Any]:
+        return self._client._search_pages(node, model, page_size, self._txid)
+
+    async def aggregate(self, node: QueryNode, model: type[AuraModel]) -> AggregateResult:
+        return await self._client._aggregate(node, model, self._txid)
 
 
 class Client:
@@ -676,6 +686,56 @@ class Client:
                 await aclose()
             if cancelled:
                 self._metrics.record_stream_cancellation()
+
+    async def _search_pages(
+        self, node: QueryNode, model: type[AuraModel], page_size: int, txid: int
+    ) -> AsyncIterator[SearchResultPage]:
+        """Drive ranked pagination: issue a ``search_page`` read per page, hydrate
+        the rows, and follow the server's ``next_cursor`` until exhausted. Bounds
+        the page size; the backend rejects an unsupported backend or a malformed
+        cursor with a structured error, leaving the client usable."""
+        self._ensure_open()
+        if page_size <= 0:
+            raise AuraQueryError("page_size must be positive")
+        base_ir = node.to_ir()
+        if not any(k in base_ir for k in ("vector", "text_search", "hybrid")):
+            raise AuraQueryError(
+                "search_pages requires a ranked clause "
+                "(search_text, search_vector, or search_hybrid)"
+            )
+        cursor: str | None = None
+        while True:
+            page_ir = {**base_ir, "operation": "search_page", "page_size": page_size}
+            if cursor is not None:
+                page_ir["cursor"] = cursor
+            self._metrics.record_query("search_page")
+            result = await self._backend.execute_query(page_ir, txid=txid)
+            rows = self._hydrator.hydrate_rows(model, result.rows) if result.rows else []
+            next_cursor = result.metadata.get("next_cursor")
+            yield SearchResultPage(rows=rows, cursor=next_cursor)
+            if not next_cursor:
+                break
+            cursor = next_cursor
+
+    async def _aggregate(
+        self, node: QueryNode, model: type[AuraModel], txid: int
+    ) -> AggregateResult:
+        """Issue an ``aggregate`` read (count/min/max metrics and terms facets) and
+        parse the structured result. The backend rejects an unsupported backend
+        with a clear capability error, leaving the client usable."""
+        self._ensure_open()
+        base_ir = node.to_ir()
+        facets = list(getattr(node, "facets", ()))
+        metrics = list(getattr(node, "metrics", ()))
+        if not facets and not metrics:
+            raise AuraQueryError("aggregate() requires at least one facet or metric")
+        agg_ir = {**base_ir, "operation": "aggregate", "facets": facets, "metrics": metrics}
+        self._metrics.record_query("aggregate")
+        result = await self._backend.execute_query(agg_ir, txid=txid)
+        body = result.metadata.get("aggregate")
+        if body is None:
+            raise AuraQueryError("aggregate response did not include a result")
+        return AggregateResult.from_dict(body)
 
     # -- mutation helpers (shared by client and transactions) --------------------
     async def _insert_obj(

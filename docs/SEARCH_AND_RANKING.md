@@ -40,16 +40,37 @@ rows = await client.search(Doc).search_text("body", "vector index", rank="bm25")
 
 BM25 defaults on the server are `k1 = 1.2`, `b = 0.75`.
 
-## Exact vector search
+## Vector search (exact, and an approximate preview)
 
-`search_vector` is exact nearest-neighbour search. Exact search is the correctness baseline
-in AuraDB v1.1.0; approximate (ANN/HNSW) search is not implemented.
+`search_vector` is exact nearest-neighbour search by default — the correctness baseline.
 
 ```python
 rows = await client.search(Doc).search_vector("embedding", q, metric="cosine", top_k=10).all()
 ```
 
 `metric` is `"cosine"` (default), `"euclidean"`, or `"dot"`.
+
+### Approximate (HNSW) preview — opt-in (v0.6.0 / AuraDB v1.2.0)
+
+Pass `approximate=True` (or a dict of HNSW parameters `m` / `ef_construction` / `ef_search`)
+to opt into AuraDB v1.2.0's approximate vector **preview** for a query. Exact search remains
+the default and correctness baseline; the preview trades a little recall for sub-linear query
+cost. A server that does not advertise the `approximate_vector_search_preview` capability
+rejects the request.
+
+```python
+# Default preview parameters:
+rows = await client.search(Doc).search_vector("embedding", q, top_k=10, approximate=True).all()
+
+# Tuned beam width (higher ef_search -> more recall, more cost):
+rows = await (
+    client.search(Doc)
+    .search_vector("embedding", q, top_k=10, approximate={"ef_search": 128})
+    .all()
+)
+```
+
+Unknown or non-positive parameters raise `AuraQueryError`. **This is not production ANN.**
 
 ## Hybrid search
 
@@ -91,6 +112,26 @@ for row in rows:
 - `score` — the primary (or fused) score.
 - `text_score` / `vector_score` — component scores for hybrid results.
 - `rank` — 1-based position in the ranked result set.
+
+## Ranked pagination (v0.6.0)
+
+`search_pages(page_size=...)` pages a ranked search by AuraDB v1.2.0's stable `search_page`
+cursor tokens, instead of loading the whole result with `.all()`:
+
+```python
+async for page in client.search(Doc).search_text("body", "raft").search_pages(page_size=20):
+    for row in page.rows:           # hydrated models, ranked order, stable cross-page rank
+        ...
+    if page.has_more:               # page.cursor is the opaque next-page token
+        ...
+```
+
+Each `SearchResultPage` carries `rows`, an opaque `cursor` (the next-page token, server
+issued — never construct one yourself), and `has_more`. Pagination requires a ranked clause
+(`search_text` / `search_vector` / `search_hybrid`); a non-ranked builder raises
+`AuraQueryError`, and a backend without the `ranked_pagination` capability raises a clear
+error. Exact-vector pages are duplicate-free across concurrent writes; for duplicate-stable
+BM25/hybrid paging across writes, page inside a transaction so the snapshot fixes the corpus.
 
 ## Capability negotiation
 

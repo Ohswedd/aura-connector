@@ -11,6 +11,7 @@ exercise the same protocol + hydration path as a network transport.
 from __future__ import annotations
 
 import copy
+import json
 import math
 from typing import Any
 
@@ -190,7 +191,7 @@ class ReferenceServer:
             return self._execute_raw(ir, store)
         if operation == "traverse":
             return self._execute_traverse(ir, store)
-        if operation not in {"select", "count", "exists"}:
+        if operation not in {"select", "count", "exists", "search_page", "aggregate"}:
             raise AuraQueryError(f"Unsupported query operation {operation!r}")
 
         model = ir.get("model")
@@ -202,6 +203,10 @@ class ReferenceServer:
         filters = ir.get("filters", [])
         rows = [r for r in rows if self._matches_all(r, filters)]
 
+        if operation == "search_page":
+            return self._search_page(ir, model, store, rows)
+        if operation == "aggregate":
+            return self._aggregate(ir, model, rows)
         if operation == "count":
             return QueryResultBody(rows=[], count=len(rows))
         if operation == "exists":
@@ -362,6 +367,123 @@ class ReferenceServer:
             rows=[dict(r) for r in current_rows],
             count=len(current_rows),
             metadata={"model": current_model},
+        )
+
+    def _aggregate(self, ir: dict[str, Any], model: str, rows: list[Row]) -> QueryResultBody:
+        """Compute count/min/max metrics and terms facets (mirrors the AuraDB
+        ``aggregate`` request). The matched set is the filtered rows, or — when a
+        ``text_search`` clause is present — the BM25 candidate set. The reference
+        engine has no equality index, so facets always report ``used_index`` False
+        (an honest scan)."""
+        metrics_spec = ir.get("metrics", [])
+        facets_spec = ir.get("facets", [])
+        if not metrics_spec and not facets_spec:
+            raise AuraQueryError("an aggregate query must request at least one facet or metric")
+
+        scanned = len(rows)
+        search_scoped = ir.get("text_search") is not None
+        if search_scoped:
+            matched_rows = [row for row, _ in self._apply_text_ranked(ir["text_search"], rows)]
+        else:
+            matched_rows = rows
+        matched = len(matched_rows)
+
+        metric_results: list[dict[str, Any]] = []
+        for spec in metrics_spec:
+            op = spec.get("op")
+            if op == "count":
+                metric_results.append({"op": "count", "value": matched})
+            elif op in ("min", "max"):
+                field = spec.get("field")
+                if not field:
+                    raise AuraQueryError(f"aggregation {op!r} requires a field")
+                values = [
+                    row[field]
+                    for row in matched_rows
+                    if isinstance(row.get(field), (int, float))
+                    and not isinstance(row.get(field), bool)
+                ]
+                value = (min(values) if op == "min" else max(values)) if values else None
+                metric_results.append({"op": op, "field": field, "value": value})
+            else:
+                raise AuraQueryError(f"unknown aggregation operator {op!r}")
+
+        facet_results: list[dict[str, Any]] = []
+        for spec in facets_spec:
+            field = spec.get("field")
+            if not field:
+                raise AuraQueryError("facet field must not be empty")
+            limit = int(spec.get("limit") or 10)
+            counts: dict[Any, int] = {}
+            for row in matched_rows:
+                value = row.get(field)
+                if value is None or isinstance(value, (list, dict)):
+                    continue
+                counts[value] = counts.get(value, 0) + 1
+            buckets = sorted(
+                ({"value": k, "count": c} for k, c in counts.items()),
+                key=lambda b: (-b["count"], _key_sort(b["value"])),
+            )[:limit]
+            facet_results.append({"field": field, "used_index": False, "buckets": buckets})
+
+        body = {
+            "collection": model,
+            "matched": matched,
+            "scanned": scanned,
+            "filter_present": bool(ir.get("filters")),
+            "search_scoped": search_scoped,
+            "metrics": metric_results,
+            "facets": facet_results,
+        }
+        return QueryResultBody(rows=[], count=matched, metadata={"aggregate": body})
+
+    def _search_page(
+        self, ir: dict[str, Any], model: str, store: Store, rows: list[Row]
+    ) -> QueryResultBody:
+        """Page a ranked search by stable keyset cursor (mirrors the AuraDB
+        ``search_page`` request). Reuses the ranked scoring/order, seeks past the
+        cursor key, slices ``page_size`` rows, and emits the next-page token in
+        ``metadata.next_cursor``."""
+        if not _is_ranked(ir):
+            raise AuraQueryError(
+                "search_page requires a ranked clause (vector, text_search, or hybrid)"
+            )
+        page_size = int(ir.get("page_size", 0))
+        if page_size <= 0:
+            raise AuraQueryError("page_size must be >= 1")
+
+        scored = self._apply_search(ir, rows)  # sorted by (-score, stable key)
+        fingerprint = _search_fp(ir)
+
+        start = 0
+        cursor = ir.get("cursor")
+        if cursor:
+            state = _decode_search_cursor(cursor)
+            if state.get("f") != fingerprint:
+                raise AuraQueryError("cursor token does not belong to this query")
+            after = (-float(state["s"]), _key_sort(state["k"]))
+            start = next(
+                (
+                    i
+                    for i, (row, bundle) in enumerate(scored)
+                    if (-_score_of(bundle), _key_sort(self._stable_key(row))) > after
+                ),
+                len(scored),
+            )
+
+        page = scored[start : start + page_size]
+        next_cursor = None
+        if start + page_size < len(scored):
+            last_row, last_bundle = page[-1]
+            next_cursor = _encode_search_cursor(
+                _score_of(last_bundle), self._stable_key(last_row), fingerprint
+            )
+        result_rows = [
+            self._project(model, store, ir, row, bundle, start + idx)
+            for idx, (row, bundle) in enumerate(page)
+        ]
+        return QueryResultBody(
+            rows=result_rows, count=len(result_rows), metadata={"next_cursor": next_cursor}
         )
 
     def _apply_search(
@@ -837,6 +959,42 @@ def _sort_key(value: Any) -> tuple[int, Any]:
 def _is_ranked(ir: dict[str, Any]) -> bool:
     """Whether the query orders by a relevance/similarity score."""
     return any(k in ir for k in ("vector", "text", "text_search", "hybrid"))
+
+
+def _score_of(bundle: dict[str, float] | None) -> float:
+    return float((bundle or {}).get("score", float("-inf")))
+
+
+def _fnv1a(text: str) -> int:
+    h = 0xCBF29CE484222325
+    for byte in text.encode("utf-8"):
+        h ^= byte
+        h = (h * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def _search_fp(ir: dict[str, Any]) -> int:
+    """A deterministic fingerprint of the ranking-relevant parts of a query, so a
+    cursor token cannot be replayed against a different query."""
+    key = {k: ir.get(k) for k in ("model", "filters", "vector", "text", "text_search", "hybrid")}
+    return _fnv1a(json.dumps(key, sort_keys=True, default=str))
+
+
+def _encode_search_cursor(score: float, key: Any, fingerprint: int) -> str:
+    """Opaque, bounded cursor token: hex of a compact JSON record. Carries only
+    the continuation key and the query fingerprint — no query payload."""
+    body = json.dumps({"s": score, "k": key, "f": fingerprint}, default=str)
+    return body.encode("utf-8").hex()
+
+
+def _decode_search_cursor(token: str) -> dict[str, Any]:
+    try:
+        data = json.loads(bytes.fromhex(token).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise AuraQueryError("invalid cursor token") from exc
+    if not isinstance(data, dict) or "s" not in data or "k" not in data or "f" not in data:
+        raise AuraQueryError("invalid cursor token")
+    return data
 
 
 def _tokenize(text: str) -> list[str]:

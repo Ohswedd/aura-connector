@@ -56,8 +56,10 @@ from .fields import Field, FieldInfo
 from .models import AuraModel, get_model, registered_models
 from .observability import LatencyHistogram, Metrics, TelemetryConfig, query_fingerprint
 from .query import (
+    AggregateResult,
     FieldReference,
     QueryBuilder,
+    SearchResultPage,
     and_,
     not_,
     or_,
@@ -95,6 +97,8 @@ __all__ = [
     "registered_models",
     # query
     "QueryBuilder",
+    "SearchResultPage",
+    "AggregateResult",
     "FieldReference",
     "and_",
     "or_",
@@ -162,4 +166,4 @@ __all__ = [
     "RelationshipNotLoadedError",
 ]
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"

@@ -10,11 +10,13 @@ from aura.backends.auradb_native import (
     AuraDBNativeBackend,
     _collection_schema,
     _decode_fields,
+    _error_from_payload,
     _translate_predicate,
     _translate_select,
 )
 from aura.backends.registry import backend_family, resolve_backend
 from aura.config import TLSConfig, parse_dsn
+from aura.errors import AuraQueryError, AuraServerError, AuraTimeoutError
 from aura.observability import Metrics, TelemetryConfig, _TelemetryBridge
 from aura.protocol.awp1 import AWPFrame, Opcode, decode_frame, decode_header, encode_frame
 
@@ -141,3 +143,27 @@ def test_native_backend_tls_context_from_config():
     )
     ctx = backend._ssl_context()
     assert ctx is not None
+
+
+def test_query_timeout_maps_to_timeout_error():
+    # AuraDB v1.2.0 cancels an over-budget read with a structured `query_timeout`;
+    # the connector surfaces it as a timeout (not a generic server error) and
+    # preserves the wire code.
+    err = _error_from_payload({"code": "query_timeout", "message": "query timed out: ..."})
+    assert isinstance(err, AuraTimeoutError)
+    assert err.code == "query_timeout"
+
+
+def test_transaction_timeout_maps_to_timeout_error():
+    err = _error_from_payload({"code": "transaction_timeout", "message": "txn timed out"})
+    assert isinstance(err, AuraTimeoutError)
+
+
+def test_invalid_request_maps_to_query_error_and_unknown_falls_back():
+    assert isinstance(
+        _error_from_payload({"code": "invalid_request", "message": "bad"}), AuraQueryError
+    )
+    # An unrecognized code falls back to a server error rather than raising in the mapper.
+    assert isinstance(
+        _error_from_payload({"code": "some_future_code", "message": "x"}), AuraServerError
+    )
