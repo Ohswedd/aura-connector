@@ -21,17 +21,17 @@ backend by changing only the DSN. AuraDB is the native, high-performance target 
 Wire Protocol; the other backends make the same model and query API useful immediately on
 existing infrastructure.
 
-**Aura Connector v0.6.1 is the matching client for AuraDB v1.2.1** (query ergonomics:
-aggregations, terms facets, cooperative query timeouts), building on the v1.1.0 search and
-ranking features (`search_text` BM25, `search_vector`, `search_hybrid`). The `.timeout(ms)`
-query option is enforced end-to-end by AuraDB v1.2.x. v0.6.1 is a conformance and
-documentation hardening release over v0.6.0: it adds no new API; its one functional change is
-a narrow bug fix — the AuraDB backend now forwards the per-query `timeout_ms` to the wire, so
-`.timeout(ms)` is actually enforced (v0.6.0 silently dropped it for the AuraDB backend). Feature
-differences between
-backends are honest: search/ranking APIs require AuraDB capabilities, and a backend that does
-not support a requested feature raises a structured capability error instead of pretending to
-support it.
+**Aura Connector v0.7.0 is the matching client for AuraDB v1.3.0**, building on the v1.2.x
+query ergonomics (aggregations, terms facets, cooperative query timeouts, the opt-in HNSW
+preview) and the v1.1.0 search and ranking features (`search_text` BM25, `search_vector`,
+`search_hybrid`). v0.7.0 adds, additively and backward compatibly: **group-by aggregation**
+(`group_by`), **approximate-vector (HNSW) preview options** including an `"exact"`/`"error"`
+fallback policy (`HnswOptions`), a **best-effort query profile** (`profile()` / `QueryProfile`),
+and **public ranked-search cursor resume** (`Page`/`SearchPage`, `client.resume_search`,
+`builder.page`). Each v1.3 feature is gated on a capability the AuraDB backend negotiates at
+handshake. Feature differences between backends are honest: search/ranking APIs require AuraDB
+capabilities, and a backend that does not support a requested feature raises a structured
+capability error instead of pretending to support it.
 
 It is useful today with zero setup — the package ships an in-memory reference backend and
 first-class SQLite, so the examples and the full default test suite run with no external
@@ -195,17 +195,22 @@ the connector's bundled reference protocol path, not the AuraDB network server. 
 
 Against AuraDB v1.1.x and later (and the in-memory reference backend), the connector exposes
 first-class ranked search. Exact vector search is the default and correctness baseline;
-against AuraDB v1.2.0 the connector can opt a vector query into the approximate (HNSW)
-preview (`search_vector(..., approximate=True)`) — not production ANN.
+against AuraDB v1.2.0+ the connector can opt a vector query into the approximate (HNSW)
+preview (`search_vector(..., approximate=True)`, or `HnswOptions(...)` for tuned parameters
+and an `"exact"`/`"error"` fallback policy) — not large-scale ANN.
 
 ```python
-from aura import search_scores
+from aura import HnswOptions, search_scores
 
 # Ranked full-text (BM25).
 rows = await client.search(Doc).search_text("body", "vector index", rank="bm25").all()
 
 # Exact vector search.
 rows = await client.search(Doc).search_vector("embedding", q, metric="cosine", top_k=10).all()
+
+# Approximate (HNSW) preview with tuned parameters and a fallback policy.
+opts = HnswOptions(ef_search=64, fallback="exact")
+rows = await client.search(Doc).search_vector("embedding", q, top_k=10, approximate=opts).all()
 
 # Hybrid text + vector, fused.
 rows = await (
@@ -218,6 +223,15 @@ rows = await (
 for row in rows:
     s = search_scores(row)
     print(s.rank, s.score, s.text_score, s.vector_score)
+
+# Group-by aggregation, and public cursor resume from an opaque token (AuraDB v1.3.0).
+agg = await client.query(Order).group_by("region").aggregate_count().aggregate()
+for group in agg.groups.groups:
+    print(group.key, group.count)
+
+search = client.search(Doc).search_text("body", "raft")
+first = await search.page(page_size=20)
+nxt = await client.resume_search(search, first.next_cursor, page_size=20)
 ```
 
 `.explain()` on any query or search builder returns the client-side Query IR plan; the

@@ -12,13 +12,14 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Generic, Literal, Protocol, TypeVar, runtime_checkable
 
 from ..errors import AuraNotFoundError, AuraQueryError
 from .ast import (
     CountQuery,
     DeleteQuery,
     ExistsQuery,
+    GroupBy,
     HybridSearch,
     Include,
     InsertQuery,
@@ -37,18 +38,26 @@ if TYPE_CHECKING:
     from ..models import AuraModel
 
 __all__ = [
+    "AggregateGroup",
     "AggregateResult",
     "DeleteBuilder",
     "Executor",
     "FacetBucket",
     "FacetResult",
+    "GroupByResult",
+    "HnswOptions",
     "MetricResult",
+    "Page",
     "QueryBuilder",
+    "QueryProfile",
     "QueryResult",
+    "SearchPage",
     "SearchResultPage",
     "TraverseBuilder",
     "UpdateBuilder",
 ]
+
+_PageItem = TypeVar("_PageItem")
 
 
 @dataclass
@@ -81,6 +90,80 @@ class SearchResultPage:
 
 
 @dataclass(frozen=True)
+class Page(Generic[_PageItem]):
+    """One page of a ranked search, resumable from an externally-held cursor token.
+
+    Unlike :class:`SearchResultPage` (yielded by the in-process pagination loop),
+    a :class:`Page` is the standalone, public result of a single page fetch — what
+    :meth:`~aura.Client.resume_search` and :meth:`QueryBuilder.page` return — so an
+    application can persist :attr:`next_cursor` across processes and resume later.
+
+    * ``items`` — the hydrated models for this page, in ranked order.
+    * ``next_cursor`` — the opaque token to fetch the next page, or ``None`` at the
+      end. Treat it as opaque: never parse it. Its lifetime is bounded by the
+      server, so resume promptly.
+    * ``total`` — the total ranked-result count when the server reports one, else
+      ``None`` (it is not always available).
+    """
+
+    items: list[_PageItem] = dc_field(default_factory=list)
+    next_cursor: str | None = None
+    total: int | None = None
+
+    @property
+    def has_more(self) -> bool:
+        """Whether a further page is available (a non-``None`` ``next_cursor``)."""
+        return self.next_cursor is not None
+
+
+#: ``SearchPage`` is the ranked-search specialization of the public :class:`Page`.
+SearchPage = Page[Any]
+
+
+@dataclass(frozen=True)
+class HnswOptions:
+    """Approximate (HNSW) vector-search preview options for ``search_vector`` (AuraDB v1.3.0).
+
+    All index/search parameters are optional positive integers; omit one to let the
+    server choose. ``fallback`` controls what happens when an approximate request
+    falls below the server's threshold for using the HNSW index:
+
+    * ``"exact"`` (default) — the server transparently runs exact search instead,
+      keeping exact search as the correctness baseline.
+    * ``"error"`` — the server returns a structured error rather than silently
+      falling back.
+
+    Exact search remains the default and the baseline; these options only take
+    effect on a server that advertises the approximate-vector preview capability.
+    """
+
+    m: int | None = None
+    ef_construction: int | None = None
+    ef_search: int | None = None
+    fallback: Literal["exact", "error"] = "exact"
+
+    def __post_init__(self) -> None:
+        if self.fallback not in ("exact", "error"):
+            raise AuraQueryError("HnswOptions.fallback must be 'exact' or 'error'")
+        for name in ("m", "ef_construction", "ef_search"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise AuraQueryError(f"HnswOptions.{name} must be a positive integer")
+
+    def to_ir(self) -> dict[str, Any]:
+        """Serialize to the approximate-options dict carried alongside the vector clause."""
+        ir: dict[str, Any] = {}
+        for name in ("m", "ef_construction", "ef_search"):
+            value = getattr(self, name)
+            if value is not None:
+                ir[name] = value
+        ir["fallback"] = self.fallback
+        return ir
+
+
+@dataclass(frozen=True)
 class FacetBucket:
     """One terms-facet bucket: a distinct value and its count."""
 
@@ -99,11 +182,145 @@ class FacetResult:
 
 @dataclass(frozen=True)
 class MetricResult:
-    """One computed aggregation metric (``count``/``min``/``max``)."""
+    """One computed aggregation metric (``count``/``min``/``max``/``avg``)."""
 
     op: str
     value: Any
     field: str | None = None
+
+
+@dataclass(frozen=True)
+class AggregateGroup:
+    """One group of a group-by aggregation (AuraDB v1.3.0).
+
+    ``key`` is the group's scalar value, ``count`` the number of matched rows in
+    it, and ``metrics`` the per-group metric values (empty when the aggregate
+    requested no metrics). ``metric(op, field=None)`` is a convenience lookup.
+    """
+
+    key: Any
+    count: int
+    metrics: list[MetricResult] = dc_field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> AggregateGroup:
+        return cls(
+            key=data.get("key"),
+            count=int(data.get("count", 0)),
+            metrics=[
+                MetricResult(op=m["op"], value=m.get("value"), field=m.get("field"))
+                for m in data.get("metrics", [])
+            ],
+        )
+
+    def metric(self, op: str, field: str | None = None) -> Any:
+        """The value of this group's metric matching ``op`` (and ``field``), or ``None``."""
+        for m in self.metrics:
+            if m.op == op and (field is None or m.field == field):
+                return m.value
+        return None
+
+
+@dataclass(frozen=True)
+class GroupByResult:
+    """The grouped result of an ``.aggregate().group_by(...)`` query (AuraDB v1.3.0).
+
+    ``groups`` are ordered count-descending, then key-ascending. ``group_count_total``
+    is the total number of distinct groups the server found; when it exceeds
+    ``len(groups)`` the result was truncated to ``group_limit``.
+    """
+
+    field: str
+    groups: list[AggregateGroup] = dc_field(default_factory=list)
+    group_count_total: int = 0
+    group_limit: int = 0
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> GroupByResult:
+        groups = [AggregateGroup.from_dict(g) for g in data.get("groups", [])]
+        return cls(
+            field=str(data.get("field", "")),
+            groups=groups,
+            group_count_total=int(data.get("group_count_total", len(groups))),
+            group_limit=int(data.get("group_limit", 0)),
+        )
+
+    @property
+    def truncated(self) -> bool:
+        """Whether more groups exist than were returned (``group_count_total`` exceeds them)."""
+        return self.group_count_total > len(self.groups)
+
+    def group(self, key: Any) -> AggregateGroup | None:
+        """The group whose ``key`` equals ``key``, if present."""
+        for g in self.groups:
+            if g.key == key:
+                return g
+        return None
+
+
+@dataclass(frozen=True)
+class QueryProfile:
+    """A best-effort, advisory query profile attached to a result (AuraDB v1.3.0).
+
+    Every field is optional: the server populates only what it measured for a given
+    read, and an older server omits the profile entirely. Timings are microseconds
+    where the server reports them; treat all values as advisory diagnostics, not a
+    stable contract.
+    """
+
+    plan_id: str | None = None
+    planning_us: int | None = None
+    execution_us: int | None = None
+    rows_scanned: int | None = None
+    rows_matched: int | None = None
+    rows_returned: int | None = None
+    index_used: bool | None = None
+    search_mode: str | None = None
+    vector_mode: str | None = None
+    facet_buckets: int | None = None
+    groups_returned: int | None = None
+    timeout_checked: bool | None = None
+    deadline_ms: int | None = None
+    cursor_mode: str | None = None
+    warnings: list[str] = dc_field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> QueryProfile:
+        def _int(key: str) -> int | None:
+            value = data.get(key)
+            return (
+                int(value)
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+                else None
+            )
+
+        def _bool(key: str) -> bool | None:
+            value = data.get(key)
+            return bool(value) if isinstance(value, bool) else None
+
+        def _str(key: str) -> str | None:
+            value = data.get(key)
+            return str(value) if isinstance(value, str) else None
+
+        raw_warnings = data.get("warnings")
+        warnings = [str(w) for w in raw_warnings] if isinstance(raw_warnings, list) else []
+        return cls(
+            plan_id=_str("plan_id"),
+            planning_us=_int("planning_us"),
+            execution_us=_int("execution_us"),
+            rows_scanned=_int("rows_scanned"),
+            rows_matched=_int("rows_matched"),
+            rows_returned=_int("rows_returned"),
+            index_used=_bool("index_used"),
+            search_mode=_str("search_mode"),
+            vector_mode=_str("vector_mode"),
+            facet_buckets=_int("facet_buckets"),
+            groups_returned=_int("groups_returned"),
+            timeout_checked=_bool("timeout_checked"),
+            deadline_ms=_int("deadline_ms"),
+            cursor_mode=_str("cursor_mode"),
+            warnings=warnings,
+        )
 
 
 @dataclass
@@ -120,9 +337,17 @@ class AggregateResult:
     search_scoped: bool = False
     metrics: list[MetricResult] = dc_field(default_factory=list)
     facets: list[FacetResult] = dc_field(default_factory=list)
+    #: The group-by result, present only when the query used ``.group_by(...)`` and
+    #: the server returned a ``groups`` object; ``None`` otherwise (old responses).
+    groups: GroupByResult | None = None
+    #: A best-effort query profile, present only when profiling was requested and the
+    #: server attached one; ``None`` otherwise.
+    profile: QueryProfile | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AggregateResult:
+        groups_raw = data.get("groups")
+        profile_raw = data.get("profile")
         return cls(
             collection=data.get("collection", ""),
             matched=int(data.get("matched", 0)),
@@ -144,6 +369,8 @@ class AggregateResult:
                 )
                 for f in data.get("facets", [])
             ],
+            groups=GroupByResult.from_dict(groups_raw) if isinstance(groups_raw, dict) else None,
+            profile=QueryProfile.from_dict(profile_raw) if isinstance(profile_raw, dict) else None,
         )
 
     def metric(self, op: str, field: str | None = None) -> Any:
@@ -185,6 +412,12 @@ class Executor(Protocol):
         """Compute aggregations/facets over a collection."""
         ...
 
+    async def resume_page(
+        self, node: QueryNode, model: type[AuraModel], page_size: int, cursor: str | None
+    ) -> Page[Any]:
+        """Fetch a single ranked-search page, optionally resuming from ``cursor``."""
+        ...
+
 
 def _to_vector_tuple(value: Any) -> tuple[float, ...]:
     if hasattr(value, "to_list"):
@@ -214,6 +447,11 @@ class QueryBuilder:
     def query(self) -> SelectQuery:
         """The underlying immutable :class:`SelectQuery` AST node."""
         return self._query
+
+    @property
+    def model(self) -> type[AuraModel]:
+        """The model class this builder queries."""
+        return self._model
 
     # -- filtering ---------------------------------------------------------------
     def where(self, predicate: Predicate) -> QueryBuilder:
@@ -338,31 +576,51 @@ class QueryBuilder:
         *,
         metric: str = "cosine",
         top_k: int = 10,
-        approximate: bool | dict[str, int] | None = None,
+        approximate: bool | dict[str, int] | HnswOptions | None = None,
     ) -> QueryBuilder:
         """Vector nearest-neighbour search returning the closest ``top_k``.
 
-        Exact by default. Pass ``approximate=True`` (or a dict of HNSW
-        parameters — ``m``, ``ef_construction``, ``ef_search``) to opt into
-        AuraDB v1.2.0's approximate (HNSW) **preview** for this query; exact
-        search remains the correctness baseline. A server that does not advertise
-        the ``approximate_vector_search_preview`` capability rejects the request.
+        Exact by default. Pass ``approximate=True`` (or an :class:`HnswOptions`, or
+        a dict of HNSW parameters — ``m``, ``ef_construction``, ``ef_search``, and
+        ``fallback``) to opt into AuraDB's approximate (HNSW) **preview** for this
+        query; exact search remains the correctness baseline. ``fallback`` selects
+        what happens when a request falls below the server's HNSW threshold:
+        ``"exact"`` (default) runs exact search, ``"error"`` returns a structured
+        error. A server that does not advertise the approximate-vector preview
+        capability rejects the request.
         """
         if top_k <= 0:
             raise AuraQueryError("top_k must be positive")
         builder = self.nearest(field, query_vector, metric=metric, limit=top_k)
         if approximate is None or approximate is False:
             return builder
-        ann: dict[str, int] = {} if approximate is True else dict(approximate)
-        allowed = {"m", "ef_construction", "ef_search"}
+        if isinstance(approximate, HnswOptions):
+            ann = approximate.to_ir()
+        elif approximate is True:
+            ann = {}
+        else:
+            ann = self._validate_ann_dict(dict(approximate))
+        return builder._clone(builder._replace(vector_ann=ann))
+
+    @staticmethod
+    def _validate_ann_dict(ann: dict[str, Any]) -> dict[str, Any]:
+        allowed_ints = {"m", "ef_construction", "ef_search"}
+        out: dict[str, Any] = {}
         for key, value in ann.items():
-            if key not in allowed:
+            if key == "fallback":
+                if value not in ("exact", "error"):
+                    raise AuraQueryError("approximate fallback must be 'exact' or 'error'")
+                out[key] = value
+                continue
+            if key not in allowed_ints:
                 raise AuraQueryError(
-                    f"unknown approximate parameter {key!r} (allowed: {sorted(allowed)})"
+                    f"unknown approximate parameter {key!r} "
+                    f"(allowed: {sorted(allowed_ints)} plus 'fallback')"
                 )
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise AuraQueryError(f"approximate parameter {key!r} must be a positive integer")
-        return builder._clone(builder._replace(vector_ann=ann))
+            out[key] = value
+        return out
 
     def search_hybrid(
         self,
@@ -489,6 +747,33 @@ class QueryBuilder:
             spec["limit"] = limit
         return self._clone(self._replace(facets=(*self._query.facets, spec)))
 
+    def group_by(self, field: FieldReference | str, *, limit: int | None = None) -> QueryBuilder:
+        """Group an ``.aggregate()`` query by a scalar ``field`` (AuraDB v1.3.0).
+
+        The aggregate's metrics are then computed per group, and the result carries
+        a :class:`GroupByResult` on :attr:`AggregateResult.groups`. ``limit`` bounds
+        the number of returned groups (server-ordered count-descending, then
+        key-ascending); ``None`` lets the server apply its default cap. Requires the
+        backend's ``group_by`` capability.
+        """
+        name = field.name if isinstance(field, FieldReference) else str(field)
+        if not name:
+            raise AuraQueryError("group_by field must not be empty")
+        if limit is not None and limit <= 0:
+            raise AuraQueryError("group_by limit must be positive")
+        return self._clone(self._replace(group_by=GroupBy(field=name, limit=limit)))
+
+    def profile(self, enabled: bool = True) -> QueryBuilder:
+        """Opt into a best-effort query profile on this read (AuraDB v1.3.0).
+
+        When enabled, the server attaches an advisory :class:`QueryProfile`
+        (planning/execution timing, rows scanned/matched, search/vector mode, etc.)
+        to the result metadata when it can. The profile is best-effort: any or all
+        fields may be absent, and an older server omits it. Requires the backend's
+        ``query_profile`` capability.
+        """
+        return self._clone(self._replace(profile=bool(enabled)))
+
     def aggregate_count(self) -> QueryBuilder:
         """Add a ``count`` metric to an ``.aggregate()`` query."""
         return self._clone(self._replace(metrics=(*self._query.metrics, {"op": "count"})))
@@ -508,15 +793,48 @@ class QueryBuilder:
         return self._clone(self._replace(metrics=(*self._query.metrics, {"op": op, "field": name})))
 
     async def aggregate(self) -> AggregateResult:
-        """Execute the accumulated facets/metrics as an aggregation over the
+        """Execute the accumulated facets/metrics/groups as an aggregation over the
         collection (optionally scoped by a ``search_text`` BM25 candidate set).
-        Requires at least one facet or metric."""
-        if not self._query.facets and not self._query.metrics:
+        Requires at least one facet, metric, or ``group_by``."""
+        if not self._query.facets and not self._query.metrics and self._query.group_by is None:
             raise AuraQueryError(
-                "aggregate() requires at least one facet or metric "
-                "(facet(...), aggregate_count(), min(...), max(...))"
+                "aggregate() requires at least one facet, metric, or group_by "
+                "(facet(...), aggregate_count(), min(...), max(...), group_by(...))"
             )
         return await self._executor.aggregate(self._query, self._model)
+
+    # -- v0.7.0 public cursor resume ---------------------------------------------
+    def page(self, *, page_size: int = 50, cursor: str | None = None) -> _PageFetch:
+        """Fetch one ranked-search page, optionally resuming from a ``cursor`` token.
+
+        Unlike :meth:`search_pages` (which drives the whole pagination loop in
+        process), this fetches a single :class:`Page` and returns its
+        ``next_cursor`` so an application can persist it and resume later — even in
+        a different process — by passing it back as ``cursor``. The token is opaque;
+        never parse it, and resume promptly because its lifetime is server-bounded.
+
+        Works for any ranked search (``search_text``/``search_vector`` including the
+        approximate preview/``search_hybrid``). For BM25 and hybrid results that
+        must stay stable under concurrent writes, page inside a snapshot
+        transaction. Requires the backend's ``cursor_resume`` capability.
+
+        Returns an awaitable; ``await builder.page(cursor=tok)`` yields a
+        :class:`Page`.
+        """
+        if page_size <= 0:
+            raise AuraQueryError("page_size must be positive")
+        if cursor is not None and (not isinstance(cursor, str) or not cursor):
+            raise AuraQueryError("cursor must be a non-empty opaque token")
+        ranked = (
+            self._query.text_search is not None
+            or self._query.vector is not None
+            or self._query.hybrid is not None
+        )
+        if not ranked:
+            raise AuraQueryError(
+                "page() requires a ranked clause (search_text, search_vector, or search_hybrid)"
+            )
+        return _PageFetch(self._executor, self._query, self._model, page_size, cursor)
 
     def explain(self) -> dict[str, Any]:
         """Return the client-side Query IR."""
@@ -641,6 +959,34 @@ class TraverseBuilder:
     async def all(self) -> list[Any]:
         result = await self._executor.run(self._query, self._model)
         return result.rows
+
+
+class _PageFetch:
+    """Awaitable returned by :meth:`QueryBuilder.page`: fetches one ranked page."""
+
+    __slots__ = ("_cursor", "_executor", "_model", "_page_size", "_query")
+
+    def __init__(
+        self,
+        executor: Executor,
+        query: SelectQuery,
+        model: type[AuraModel],
+        page_size: int,
+        cursor: str | None,
+    ) -> None:
+        self._executor = executor
+        self._query = query
+        self._model = model
+        self._page_size = page_size
+        self._cursor = cursor
+
+    async def _fetch(self) -> Page[Any]:
+        return await self._executor.resume_page(
+            self._query, self._model, self._page_size, self._cursor
+        )
+
+    def __await__(self) -> Any:
+        return self._fetch().__await__()
 
 
 def build_insert(

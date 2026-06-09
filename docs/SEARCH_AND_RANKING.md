@@ -70,7 +70,29 @@ rows = await (
 )
 ```
 
-Unknown or non-positive parameters raise `AuraQueryError`. **This is not production ANN.**
+Unknown or non-positive parameters raise `AuraQueryError`. **This is not large-scale ANN.**
+
+#### `HnswOptions` and the fallback policy (v0.7.0 / AuraDB v1.3.0)
+
+`HnswOptions` is a typed alternative to the dict form. Beyond `m` / `ef_construction` /
+`ef_search`, it carries a `fallback` policy controlling what happens when an approximate
+request falls below the server's HNSW threshold:
+
+```python
+from aura import HnswOptions
+
+# fallback="exact" (default): the server runs exact search below the threshold.
+opts = HnswOptions(m=16, ef_construction=200, ef_search=64, fallback="exact")
+rows = await client.search(Doc).search_vector("embedding", q, top_k=10, approximate=opts).all()
+
+# fallback="error": the server returns a structured error instead of falling back.
+strict = HnswOptions(ef_search=128, fallback="error")
+```
+
+The dict form accepts `fallback` too (`approximate={"ef_search": 128, "fallback": "error"}`).
+An invalid `fallback` raises `AuraQueryError`. The options take effect only on a server that
+advertises the approximate-vector preview (`hnsw_preview` capability); exact search remains the
+default and the correctness baseline.
 
 ## Hybrid search
 
@@ -132,6 +154,32 @@ issued — never construct one yourself), and `has_more`. Pagination requires a 
 `AuraQueryError`, and a backend without the `ranked_pagination` capability raises a clear
 error. Exact-vector pages are duplicate-free across concurrent writes; for duplicate-stable
 BM25/hybrid paging across writes, page inside a transaction so the snapshot fixes the corpus.
+
+## Public cursor resume (v0.7.0)
+
+Where `search_pages(...)` drives the whole loop in process, `builder.page(...)` and
+`client.resume_search(...)` fetch a **single** ranked page and return an opaque resume token an
+application can persist and hand back later — even from another process (AuraDB v1.3.0):
+
+```python
+search = client.search(Doc).search_text("body", "raft")
+
+first = await search.page(page_size=20)     # a public Page[T]
+for row in first.items:
+    ...
+token = first.next_cursor                    # persist this opaque token if you like
+# first.total is the ranked-result count when the server reports one, else None
+
+# Later (possibly in another process), resume from the token:
+page = await client.resume_search(search, token, page_size=20)
+```
+
+`Page[T]` (alias `SearchPage`) exposes `items`, `next_cursor`, `has_more`, and `total`. The
+token is **opaque** — never parse it — and its lifetime is bounded by the server, so resume
+promptly. Cursor resume works for BM25, hybrid, exact vector, and the approximate-vector
+preview. As with `search_pages`, for stable BM25/hybrid results under concurrent writes, run
+the original search and the resume inside one snapshot transaction. A backend without the
+`cursor_resume` capability raises `AuraCapabilityError`.
 
 ## Capability negotiation
 

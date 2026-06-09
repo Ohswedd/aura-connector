@@ -7,7 +7,16 @@ checker support; ``mypy src`` in the validation gate verifies the library itself
 
 from __future__ import annotations
 
-from aura import AuraModel, Field, Vector
+from aura import (
+    AggregateGroup,
+    AuraModel,
+    Field,
+    GroupByResult,
+    HnswOptions,
+    Page,
+    QueryProfile,
+    Vector,
+)
 from aura.query.builder import QueryResult
 from aura.query.expressions import Comparison, FieldReference
 
@@ -40,6 +49,31 @@ def test_query_result_dataclass() -> None:
     result = QueryResult(rows=[1, 2], count=2, affected=0)
     assert result.rows == [1, 2]
     assert result.count == 2
+
+
+def test_v07_result_models_are_typed() -> None:
+    group = AggregateGroup(key="emea", count=7)
+    assert group.count == 7
+    assert group.metric("count") is None
+
+    grouped = GroupByResult(field="region", groups=[group], group_count_total=9, group_limit=2)
+    assert grouped.truncated is True
+    assert grouped.group("emea") is group
+
+    profile = QueryProfile(rows_scanned=10, search_mode="bm25")
+    assert profile.rows_scanned == 10
+    assert profile.execution_us is None
+
+    page: Page[int] = Page(items=[1, 2], next_cursor="tok", total=5)
+    assert page.has_more is True
+    items: list[int] = page.items
+    assert items == [1, 2]
+
+
+def test_hnsw_options_is_typed() -> None:
+    opts = HnswOptions(m=16, ef_search=64, fallback="error")
+    ir: dict[str, object] = opts.to_ir()
+    assert ir["fallback"] == "error"
 
 
 def test_py_typed_marker_present() -> None:

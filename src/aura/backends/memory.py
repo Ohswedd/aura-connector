@@ -32,6 +32,10 @@ _MEMORY_CAPABILITIES = BackendCapabilities(
     native_protocol=True,
     document_queries=True,
     key_value=False,
+    group_by=True,
+    query_profile=True,
+    hnsw_preview=True,
+    cursor_resume=True,
 )
 
 
