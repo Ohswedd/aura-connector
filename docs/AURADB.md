@@ -22,6 +22,14 @@ result. The default transaction isolation remains `snapshot`.
 The same typed model and query API you use with every other backend works unchanged — only
 the DSN changes.
 
+> **Coordinated v1.4.0 line.** The first piece of the upcoming AuraDB v1.4.0 line is
+> server-side: production single-node operability drills and recovery confidence (backup,
+> verify, restore-to-fresh, snapshot rollback, disk/I/O drills). It is purely operational and
+> requires **no** connector API or protocol change — this connector (v0.7.0) keeps working
+> unchanged against it. The paired connector v0.8.0 work is tracked separately in
+> [ROADMAP.md](ROADMAP.md). Single-node remains the production-supported mode; there is no
+> production HA or production ANN claim.
+
 ## DSN schemes
 
 | Scheme       | Transport     | Use for |
