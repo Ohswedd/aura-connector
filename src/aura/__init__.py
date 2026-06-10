@@ -55,6 +55,7 @@ from .errors import (
 from .fields import Field, FieldInfo
 from .models import AuraModel, get_model, registered_models
 from .observability import LatencyHistogram, Metrics, TelemetryConfig, query_fingerprint
+from .profiles import ConnectionProfile
 from .query import (
     AggregateGroup,
     AggregateResult,
@@ -81,6 +82,12 @@ from .schema import (
     schema_json,
 )
 from .scores import SearchScores, search_scores
+from .search_quality import (
+    ExactAnnComparisonReport,
+    SearchEvalMetrics,
+    SearchEvalQueryResult,
+    SearchEvalReport,
+)
 from .vectors import Vector
 
 #: ``Model`` is a friendly alias for :class:`AuraModel`.
@@ -142,12 +149,18 @@ __all__ = [
     "resolve_backend",
     # config
     "ClientConfig",
+    "ConnectionProfile",
     "parse_dsn",
     "TokenAuth",
     "PasswordAuth",
     "TLSConfig",
     "RetryPolicy",
     "PoolConfig",
+    # search-quality report parsing
+    "SearchEvalReport",
+    "SearchEvalMetrics",
+    "SearchEvalQueryResult",
+    "ExactAnnComparisonReport",
     # errors
     "AuraError",
     "AuraBackendError",
@@ -178,4 +191,4 @@ __all__ = [
     "RelationshipNotLoadedError",
 ]
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"

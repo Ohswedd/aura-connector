@@ -21,15 +21,18 @@ backend by changing only the DSN. AuraDB is the native, high-performance target 
 Wire Protocol; the other backends make the same model and query API useful immediately on
 existing infrastructure.
 
-**Aura Connector v0.7.0 is the matching client for AuraDB v1.3.0**, building on the v1.2.x
-query ergonomics (aggregations, terms facets, cooperative query timeouts, the opt-in HNSW
-preview) and the v1.1.0 search and ranking features (`search_text` BM25, `search_vector`,
-`search_hybrid`). v0.7.0 adds, additively and backward compatibly: **group-by aggregation**
-(`group_by`), **approximate-vector (HNSW) preview options** including an `"exact"`/`"error"`
-fallback policy (`HnswOptions`), a **best-effort query profile** (`profile()` / `QueryProfile`),
-and **public ranked-search cursor resume** (`Page`/`SearchPage`, `client.resume_search`,
-`builder.page`). Each v1.3 feature is gated on a capability the AuraDB backend negotiates at
-handshake. Feature differences between backends are honest: search/ranking APIs require AuraDB
+**Aura Connector v0.8.0 is the matching client for AuraDB v1.4.0**, carrying forward the full
+v0.7.x feature set (group-by aggregation, the opt-in HNSW preview options with an
+`"exact"`/`"error"` fallback policy, the best-effort query profile, public ranked-search cursor
+resume) over the v1.1–v1.3 search, ranking, and query-ergonomics surface. v0.8.0 adds purely
+**client-side ergonomics**, with no wire-protocol change: **connection profiles**
+(`ConnectionProfile`, `ConnectionProfile.from_env`, `Client.from_profile` /
+`Aura.from_profile`, TLS CA and SNI/`server_name` wiring, and a token-redacting `repr`),
+**search-eval report parsing helpers** (`SearchEvalReport` / `SearchEvalMetrics` /
+`SearchEvalQueryResult` and the BM25/hybrid report models, which parse `auradb search eval`
+CLI output and do **not** run server-side CLI commands), and **capability require/describe
+helpers**. Each AuraDB feature is gated on a capability the backend negotiates at handshake.
+Feature differences between backends are honest: search/ranking APIs require AuraDB
 capabilities, and a backend that does not support a requested feature raises a structured
 capability error instead of pretending to support it.
 
@@ -191,6 +194,13 @@ client never silently downgrades to plaintext. The legacy `aura://` / `memory://
 the connector's bundled reference protocol path, not the AuraDB network server. See
 [docs/AURADB.md](docs/AURADB.md).
 
+**Connection profiles (v0.8.0).** For deployments that configure connections from the
+environment, `ConnectionProfile.from_env()` reads `AURA_ADDR` plus optional auth/TLS/timeout/
+isolation variables into a typed, immutable profile (auth token redacted from `repr`), and
+`Aura.from_profile(profile)` opens a client. It resolves through the same `parse_dsn` path, so
+it adds no new connection behaviour — and it is a convenience helper, **not** a secret manager.
+See `examples/auradb_connection_profile.py`.
+
 ## Search and ranking
 
 Against AuraDB v1.1.x and later (and the in-memory reference backend), the connector exposes
@@ -245,6 +255,16 @@ authoritative source for what the connected server supports. See
 [`auradb_hybrid_search`](examples/auradb_hybrid_search.py),
 [`auradb_explain_analyze`](examples/auradb_explain_analyze.py), and
 [`auradb_search_capabilities`](examples/auradb_search_capabilities.py) examples.
+
+**Capability UX (v0.8.0).** Beyond `capabilities().supports(flag)`, `require(flag)` raises a
+clear `AuraBackendCapabilityError` (naming the backend and missing capability) and `describe()`
+returns supported/unsupported lists — see `examples/auradb_capabilities.py`.
+
+**Search-quality reports (v0.8.0).** AuraDB's server-side `auradb search eval` / `vector eval`
+CLIs emit JSON relevance/recall reports; `aura.search_quality` parses them into typed
+`SearchEvalReport` / `ExactAnnComparisonReport` objects. The connector only parses the CLI's
+output — it does not run the CLI or compute relevance, and the metrics are dataset-specific
+regression signals, not universal benchmarks. See `examples/auradb_search_eval_report.py`.
 
 ## Backends
 

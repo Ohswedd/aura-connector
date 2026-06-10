@@ -208,3 +208,35 @@ carries the backend name and the missing capability so callers can branch on it.
 The error is also raised for unsupported backends (SQL/Mongo/Redis), and the message names
 the backend — see `examples/auradb_search_capabilities.py` and
 `examples/auradb_search_errors.py`.
+
+## Search-quality report helpers (v0.8.0)
+
+AuraDB's server-side `auradb search eval` CLI (AuraDB v1.4.0) measures ranked-retrieval
+relevance — MRR@k, NDCG@k, Recall@k — on a relevance dataset and emits a JSON report;
+`auradb vector eval` emits an exact-vs-approximate recall/latency report. These reports are
+produced by the **AuraDB CLI, not the connector**: the connector does not run server-side CLI
+commands and does not compute relevance itself. `aura.search_quality` is a convenience layer
+for reading those reports into typed, immutable objects when a deployment pipeline runs the
+CLI and wants to assert on the numbers.
+
+```python
+from aura.search_quality import SearchEvalReport
+
+report = SearchEvalReport.from_json("eval.json")   # or a JSON string
+print(report.metrics.ndcg_at_k)                    # SearchEvalMetrics
+if report.is_hybrid and report.weights is not None:
+    print(report.weights.text, report.weights.vector)
+for q in report.per_query:                         # SearchEvalQueryResult
+    print(q.query_id, q.ndcg_at_k, list(q.top_docs))
+```
+
+- `SearchEvalReport` covers all three modes (`bm25`, `vector_exact`, `hybrid`); `bm25` params
+  are present for text-bearing modes and `weights` only for hybrid.
+- `ExactAnnComparisonReport.from_json(...)` parses the `vector eval` report. The approximate
+  path it describes is a **preview, not production ANN**.
+- `from_dict`/`from_json` raise `AuraValidationError` on a missing or mis-shaped field, and
+  metrics are validated to lie in `[0, 1]`.
+
+The metrics are **dataset-specific regression signals, not universal benchmarks**, and the
+helpers only parse — they make no relevance claim of their own. See
+`examples/auradb_search_eval_report.py`.

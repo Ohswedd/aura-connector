@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from ..errors import AuraBackendCapabilityError
+
 __all__ = ["BackendCapabilities", "CAPABILITY_FLAGS"]
 
 #: The capability flags, in declaration order. Used to render the capability matrix and
@@ -78,6 +80,31 @@ class BackendCapabilities:
         if capability not in CAPABILITY_FLAGS:
             raise ValueError(f"Unknown capability {capability!r}")
         return bool(getattr(self, capability))
+
+    def require(self, capability: str) -> None:
+        """Assert that ``capability`` is supported, raising otherwise.
+
+        Raises :class:`ValueError` for an unknown capability name and
+        :class:`~aura.errors.AuraBackendCapabilityError` when the capability is
+        known but this backend does not provide it. The error names the backend and
+        the missing capability so callers can branch on capabilities instead of
+        catching a generic failure — Aura never silently emulates a missing feature.
+        """
+        if not self.supports(capability):
+            raise AuraBackendCapabilityError(
+                f"backend {self.name!r} does not support capability {capability!r}",
+                context={"backend": self.name, "capability": capability},
+            )
+
+    def describe(self) -> dict[str, Any]:
+        """Return a human/JSON-friendly summary of this backend's capabilities.
+
+        The result has the backend ``name`` plus ``supported`` and ``unsupported``
+        lists (each a subset of :data:`CAPABILITY_FLAGS`, in declaration order).
+        """
+        supported = [flag for flag in CAPABILITY_FLAGS if bool(getattr(self, flag))]
+        unsupported = [flag for flag in CAPABILITY_FLAGS if not bool(getattr(self, flag))]
+        return {"name": self.name, "supported": supported, "unsupported": unsupported}
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-ready dict of the backend name plus every capability flag."""

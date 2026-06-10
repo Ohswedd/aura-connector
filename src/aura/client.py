@@ -11,7 +11,7 @@ from __future__ import annotations
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from types import TracebackType
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from .backends.auradb import _ERROR_CODE_MAP as _ERROR_CODE_MAP  # re-exported for compatibility
 from .backends.auradb import ProtocolBackend, error_from_frame
@@ -46,6 +46,9 @@ from .query.builder import (
 )
 from .query.expressions import FieldReference
 from .transport.base import Transport
+
+if TYPE_CHECKING:
+    from .profiles import ConnectionProfile
 
 __all__ = ["Aura", "Client", "LeaderRedirect", "Transaction", "connect"]
 
@@ -235,6 +238,22 @@ class Client:
         """Return a connector that is both awaitable and an async context manager."""
         telemetry = options.pop("telemetry", None)
         return _ClientConnector(cls, dsn, tuple(models), transport, telemetry, options)
+
+    @classmethod
+    def from_profile(
+        cls,
+        profile: ConnectionProfile,
+        *,
+        models: Iterable[type[AuraModel]] = (),
+        transport: Transport | None = None,
+    ) -> _ClientConnector:
+        """Return a connector built from a :class:`~aura.profiles.ConnectionProfile`.
+
+        Equivalent to :meth:`connect` with the profile's DSN and resolved overrides
+        (auth token, TLS CA, SNI server name, and timeouts), so it adds no new
+        connection behaviour. The profile validates its TLS CA path here.
+        """
+        return cls.connect(profile.addr, models=models, transport=transport, **profile._overrides())
 
     @property
     def config(self) -> ClientConfig:
@@ -1163,6 +1182,16 @@ class Aura:
         **options: Any,
     ) -> _ClientConnector:
         return Client.connect(dsn, models=models, transport=transport, **options)
+
+    @staticmethod
+    def from_profile(
+        profile: ConnectionProfile,
+        *,
+        models: Iterable[type[AuraModel]] = (),
+        transport: Transport | None = None,
+    ) -> _ClientConnector:
+        """Build a connector from a :class:`~aura.profiles.ConnectionProfile`."""
+        return Client.from_profile(profile, models=models, transport=transport)
 
 
 def connect(

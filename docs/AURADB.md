@@ -5,22 +5,34 @@ The **native AuraDB backend** speaks the Aura Wire Protocol version 1 (AWP 1) to
 performs the AWP handshake (with optional static-token authentication), translates the
 connector's canonical Query IR to the server's Query IR, and decodes results back into your
 typed models. AWP 1 with auth and TLS first shipped in AuraDB v0.2.0, so **v0.2.0 is the
-minimum native server version**; the current coordinated server is AuraDB v1.3.0 (see
+minimum native server version**; the current coordinated server is AuraDB v1.4.0 (see
 [COMPATIBILITY.md](COMPATIBILITY.md)).
 
-This connector release (v0.7.0) is the paired client for AuraDB v1.3.0. It adds, additively
-and backward compatibly, the v1.3 query ergonomics on top of the v0.6 surface (aggregations,
-terms facets, ranked pagination, cooperative query timeouts, the opt-in HNSW preview):
-group-by aggregation (`group_by`), approximate-vector (HNSW) preview options including a
-`fallback` policy (`HnswOptions`), a best-effort query profile (`profile()` / `QueryProfile`),
-and public ranked-search cursor resume (`Page`/`SearchPage`, `client.resume_search`,
-`builder.page`). Each v1.3 feature is gated on a capability flag — `group_by`, `query_profile`,
-`hnsw_preview`, `cursor_resume` — that the native backend negotiates at handshake; a server
-that does not advertise a capability gets an `AuraCapabilityError` rather than a silently-wrong
-result. The default transaction isolation remains `snapshot`.
+This connector release (v0.8.0) is the paired client for AuraDB v1.4.0. It carries forward the
+full v0.7.x query surface — group-by aggregation (`group_by`), approximate-vector (HNSW)
+preview options including a `fallback` policy (`HnswOptions`), a best-effort query profile
+(`profile()` / `QueryProfile`), and public ranked-search cursor resume (`Page`/`SearchPage`,
+`client.resume_search`, `builder.page`) — each still gated on a capability flag (`group_by`,
+`query_profile`, `hnsw_preview`, `cursor_resume`) the native backend negotiates at handshake;
+a server that does not advertise a capability gets an `AuraCapabilityError` rather than a
+silently-wrong result. v0.8.0 adds purely **client-side ergonomics with no wire-protocol
+change**: connection profiles (`ConnectionProfile`, `from_env`, `Client.from_profile` /
+`Aura.from_profile`, TLS CA and SNI wiring, token-redacting `repr`), search-eval report parsing
+helpers (`SearchEvalReport` / `SearchEvalMetrics` / `SearchEvalQueryResult` and BM25/hybrid
+report models, which parse `auradb search eval` CLI output and do not run server-side CLI
+commands), and capability require/describe helpers. The default transaction isolation remains
+`snapshot`.
 
 The same typed model and query API you use with every other backend works unchanged — only
 the DSN changes.
+
+> **Coordinated v1.4.0 line.** AuraDB v1.4.0 is a production operability and search-quality
+> release: server-side single-node operability drills and recovery confidence (backup, verify,
+> restore-to-fresh, snapshot rollback, disk/I/O drills) plus the `auradb search eval` relevance
+> evaluation toolchain. That work is purely operational/evaluation tooling and requires **no**
+> connector API or protocol change — a v0.7.x connector keeps working unchanged against AuraDB
+> v1.4.0. The paired connector v0.8.0 adds the client-side ergonomics described above. Single-node
+> remains the production-supported mode; there is no production HA or production ANN claim.
 
 ## DSN schemes
 
@@ -112,6 +124,48 @@ async with connect(
 
 `verify_hostname=False` disables certificate hostname checking and is intended only for
 development against self-signed certificates.
+
+## Connection profiles (v0.8.0)
+
+A `ConnectionProfile` is a small, immutable convenience layer over a DSN plus the operational
+knobs deployments usually read from the environment. It resolves through the **same**
+`parse_dsn` path as every other entry point, so it adds no new connection behaviour — only a
+typed, redacted, env-friendly way to assemble the inputs.
+
+```python
+from aura import Aura, ConnectionProfile
+
+# Reads AURA_ADDR (required) plus the optional AURA_AUTH_TOKEN, AURA_TLS_CA,
+# AURA_SERVER_NAME, AURA_CONNECT_TIMEOUT_MS, AURA_REQUEST_TIMEOUT_MS, AURA_ISOLATION.
+profile = ConnectionProfile.from_env(prefix="AURA")
+async with Aura.from_profile(profile, models=[User]) as client:
+    ...
+```
+
+| Env var (with `AURA` prefix) | Field | Notes |
+| ---------------------------- | ----- | ----- |
+| `AURA_ADDR` | `addr` | **required** — an `aura://` / `auras://` DSN |
+| `AURA_AUTH_TOKEN` | `auth_token` | bearer token; redacted from `repr` |
+| `AURA_TLS_CA` | `tls_ca` | CA bundle path; validated to exist |
+| `AURA_SERVER_NAME` | `server_name` | TLS SNI override (see below) |
+| `AURA_CONNECT_TIMEOUT_MS` | `connect_timeout_ms` | positive integer milliseconds |
+| `AURA_REQUEST_TIMEOUT_MS` | `request_timeout_ms` | positive integer milliseconds |
+| `AURA_ISOLATION` | `isolation` | default isolation token |
+
+- **Not a secret manager.** The auth token is whatever your deployment's secret management
+  already placed in the environment. The profile redacts it from `repr` so it does not leak
+  into logs, but storing, rotating, and protecting that secret is the deployment's job.
+- **Safe defaults.** Timeouts default to 10s / 30s; `isolation` defaults to `snapshot`. The
+  deprecated `serializable` token normalizes to `snapshot` (AuraDB is not serializable, and
+  the connector does not upgrade it).
+- **Validation.** A missing address, a non-integer or non-positive timeout, or a TLS CA path
+  that does not exist raises `AuraValidationError` with a clear, secret-free message.
+- **SNI server name.** `server_name` is carried as the `tls_server_name` transport option; the
+  bundled TCP transport uses it as the TLS SNI server name. When unset, SNI is derived from the
+  address host as before.
+- **Inspect without connecting.** `profile.to_client_config()` returns the fully-resolved
+  `ClientConfig`. `ConnectionProfile` is a convenience helper, not a new client API — existing
+  `connect(...)` / `Client(...)` constructors are unchanged.
 
 ## Transactions
 
@@ -248,3 +302,32 @@ typed `AggregateResult` (AuraDB v1.2.0). AuraDB v1.3.0 adds group-by aggregation
 best-effort query profile (`profile()`, surfaced as `AggregateResult.profile` / `QueryProfile`;
 every field is advisory and optional). Each is gated on the `group_by` / `query_profile`
 capability. See [QUERY_BUILDER.md](QUERY_BUILDER.md).
+
+## Capability UX (v0.8.0)
+
+`client.capabilities()` returns the backend's honest `BackendCapabilities` declaration. v0.8.0
+adds two ergonomics helpers alongside the existing `supports(...)`:
+
+```python
+caps = client.capabilities()
+
+if caps.supports("query_profile"):     # soft branch
+    ...
+
+caps.require("group_by")               # hard requirement; raises if missing
+
+summary = caps.describe()              # {"name", "supported", "unsupported"}
+```
+
+- **`supports(flag)`** returns a bool; an unknown flag name raises `ValueError` (it is a
+  programmer error, not a missing feature).
+- **`require(flag)`** raises `AuraBackendCapabilityError` when a known capability is not
+  provided, naming the backend and the missing capability in its `context` so callers branch on
+  capabilities instead of catching a generic failure.
+- **`describe()`** returns the backend name plus `supported` / `unsupported` lists (each a
+  subset of the capability flags, in declaration order) for display.
+
+These read the **current** capability payload and require no server change. A non-AuraDB
+backend will not claim AuraDB-specific analytics — e.g. a key/value backend reports
+`query_profile` and `group_by` as unsupported and `require("hybrid_search")` raises. See
+[COMPATIBILITY.md](COMPATIBILITY.md) and [BACKEND_CAPABILITY_MATRIX.md](BACKEND_CAPABILITY_MATRIX.md).

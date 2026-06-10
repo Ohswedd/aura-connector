@@ -58,12 +58,20 @@ class TCPTransport(Transport):
     async def connect(self) -> None:
         if self._connected:
             return
+        ssl_context = self._build_ssl_context()
+        # An optional SNI override (e.g. from a ConnectionProfile's server_name,
+        # carried as the ``tls_server_name`` option). Only meaningful over TLS;
+        # when unset, asyncio derives the SNI host from the connection address.
+        server_hostname: str | None = None
+        if ssl_context is not None:
+            server_hostname = self._config.options.get("tls_server_name") or None
         try:
             self._reader, self._writer = await asyncio.wait_for(
                 asyncio.open_connection(
                     self._config.host,
                     self._config.port,
-                    ssl=self._build_ssl_context(),
+                    ssl=ssl_context,
+                    server_hostname=server_hostname,
                 ),
                 timeout=self._config.connect_timeout_s,
             )

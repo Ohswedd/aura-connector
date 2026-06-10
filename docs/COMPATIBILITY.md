@@ -7,7 +7,8 @@ which AuraDB server version, and over which Aura Wire Protocol (AWP) revision.
 
 | Aura Connector | AuraDB server | Protocol | Status |
 | -------------- | ------------- | -------- | ------ |
-| 0.7.0          | 1.3.x         | AWP 1    | Supported, recommended — paired with AuraDB v1.3.0. Adds the v1.3 query ergonomics: group-by aggregation (`group_by`), approximate-vector (HNSW) preview options incl. a `fallback` policy (`HnswOptions`), a best-effort query profile (`profile()` / `QueryProfile`), and public ranked-search cursor resume (`Page`/`SearchPage`, `resume_search`, `builder.page`). New capability flags `group_by`/`query_profile`/`hnsw_preview`/`cursor_resume` gate each feature; the native backend negotiates them at handshake. All additive and backward compatible; AWP 1 unchanged. |
+| 0.8.0          | 1.4.x / 1.3.x | AWP 1  | Supported, recommended — pairs with the AuraDB v1.4.0 line. Adds client-side ergonomics only: environment-driven connection profiles (`ConnectionProfile` / `from_env` / `from_profile`, TLS CA and SNI/`server_name` wiring, token-redacting `repr`), capability UX (`capabilities().require(...)` / `.describe()`), and typed parsers for AuraDB's `search eval` reports (`aura.search_quality`: `SearchEvalReport` / `SearchEvalMetrics` / `SearchEvalQueryResult` and BM25/hybrid models). **No protocol change, no new wire feature, no breaking API change**; existing `connect(...)` / `Client(...)` constructors are unchanged and it keeps working against v1.3.x servers. The relevance reports are produced by the AuraDB CLI and parsed client-side; the connector does not run server-side CLI commands. |
+| 0.7.0          | 1.3.x         | AWP 1    | Supported — paired with AuraDB v1.3.0. Adds the v1.3 query ergonomics: group-by aggregation (`group_by`), approximate-vector (HNSW) preview options incl. a `fallback` policy (`HnswOptions`), a best-effort query profile (`profile()` / `QueryProfile`), and public ranked-search cursor resume (`Page`/`SearchPage`, `resume_search`, `builder.page`). New capability flags `group_by`/`query_profile`/`hnsw_preview`/`cursor_resume` gate each feature; the native backend negotiates them at handshake. All additive and backward compatible; AWP 1 unchanged. |
 | 0.7.0          | 1.2.x / 1.1.x | AWP 1    | Supported for those servers' features. The v1.3 features are gated off when the server does not advertise the matching capability (a clear `AuraCapabilityError` rather than a silently-wrong result). |
 | 0.6.1          | 1.2.x         | AWP 1    | Supported — paired with AuraDB v1.2.1. Drives the v1.2 query ergonomics: aggregations (`count`/`min`/`max`), terms facets (`facet`/`aggregate`), ranked pagination (`search_pages`), and cooperative query timeouts (`timeout(ms)`). v0.6.1 forwards the per-query `timeout_ms` to the wire so `.timeout(ms)` is enforced end-to-end by AuraDB; `query_timeout`/`transaction_timeout` map to `AuraTimeoutError`. Live over-the-wire conformance ships with AuraDB v1.2.1. AWP 1 unchanged. |
 | 0.6.0          | 1.2.x         | AWP 1    | Supported — same query-ergonomics API surface (aggregations, terms facets, ranked pagination). **Known limitation:** the per-query `timeout_ms` is not forwarded for the AuraDB backend, so `.timeout(ms)` is silently dropped against AuraDB; upgrade to 0.6.1 for enforced timeouts. |
@@ -36,6 +37,11 @@ Notes:
   conflict detection on commit — not serializable isolation. `transaction(isolation=…)`
   defaults to `"snapshot"`; `"serializable"` is accepted only as a deprecated compatibility
   alias for snapshot isolation and does not change AuraDB semantics.
+- **The 0.8.0 ergonomics are convenience layers, not new guarantees.** `ConnectionProfile` is
+  not a secret manager (it redacts the token from `repr` but does not store or rotate it);
+  capability helpers read the current payload and require no server change; the search-quality
+  parsers only read CLI output and compute nothing. No production HA automation, no unbounded
+  retries, and AuraDB-only features still require an AuraDB backend that advertises them.
 
 ## Backend (database adapter) compatibility
 
