@@ -191,6 +191,13 @@ client never silently downgrades to plaintext. The legacy `aura://` / `memory://
 the connector's bundled reference protocol path, not the AuraDB network server. See
 [docs/AURADB.md](docs/AURADB.md).
 
+**Connection profiles (v0.8.0).** For deployments that configure connections from the
+environment, `ConnectionProfile.from_env()` reads `AURA_ADDR` plus optional auth/TLS/timeout/
+isolation variables into a typed, immutable profile (auth token redacted from `repr`), and
+`Aura.from_profile(profile)` opens a client. It resolves through the same `parse_dsn` path, so
+it adds no new connection behaviour — and it is a convenience helper, **not** a secret manager.
+See `examples/auradb_connection_profile.py`.
+
 ## Search and ranking
 
 Against AuraDB v1.1.x and later (and the in-memory reference backend), the connector exposes
@@ -245,6 +252,16 @@ authoritative source for what the connected server supports. See
 [`auradb_hybrid_search`](examples/auradb_hybrid_search.py),
 [`auradb_explain_analyze`](examples/auradb_explain_analyze.py), and
 [`auradb_search_capabilities`](examples/auradb_search_capabilities.py) examples.
+
+**Capability UX (v0.8.0).** Beyond `capabilities().supports(flag)`, `require(flag)` raises a
+clear `AuraBackendCapabilityError` (naming the backend and missing capability) and `describe()`
+returns supported/unsupported lists — see `examples/auradb_capabilities.py`.
+
+**Search-quality reports (v0.8.0).** AuraDB's server-side `auradb search eval` / `vector eval`
+CLIs emit JSON relevance/recall reports; `aura.search_quality` parses them into typed
+`SearchEvalReport` / `ExactAnnComparisonReport` objects. The connector only parses the CLI's
+output — it does not run the CLI or compute relevance, and the metrics are dataset-specific
+regression signals, not universal benchmarks. See `examples/auradb_search_eval_report.py`.
 
 ## Backends
 

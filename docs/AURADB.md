@@ -121,6 +121,48 @@ async with connect(
 `verify_hostname=False` disables certificate hostname checking and is intended only for
 development against self-signed certificates.
 
+## Connection profiles (v0.8.0)
+
+A `ConnectionProfile` is a small, immutable convenience layer over a DSN plus the operational
+knobs deployments usually read from the environment. It resolves through the **same**
+`parse_dsn` path as every other entry point, so it adds no new connection behaviour — only a
+typed, redacted, env-friendly way to assemble the inputs.
+
+```python
+from aura import Aura, ConnectionProfile
+
+# Reads AURA_ADDR (required) plus the optional AURA_AUTH_TOKEN, AURA_TLS_CA,
+# AURA_SERVER_NAME, AURA_CONNECT_TIMEOUT_MS, AURA_REQUEST_TIMEOUT_MS, AURA_ISOLATION.
+profile = ConnectionProfile.from_env(prefix="AURA")
+async with Aura.from_profile(profile, models=[User]) as client:
+    ...
+```
+
+| Env var (with `AURA` prefix) | Field | Notes |
+| ---------------------------- | ----- | ----- |
+| `AURA_ADDR` | `addr` | **required** — an `aura://` / `auras://` DSN |
+| `AURA_AUTH_TOKEN` | `auth_token` | bearer token; redacted from `repr` |
+| `AURA_TLS_CA` | `tls_ca` | CA bundle path; validated to exist |
+| `AURA_SERVER_NAME` | `server_name` | TLS SNI override (see below) |
+| `AURA_CONNECT_TIMEOUT_MS` | `connect_timeout_ms` | positive integer milliseconds |
+| `AURA_REQUEST_TIMEOUT_MS` | `request_timeout_ms` | positive integer milliseconds |
+| `AURA_ISOLATION` | `isolation` | default isolation token |
+
+- **Not a secret manager.** The auth token is whatever your deployment's secret management
+  already placed in the environment. The profile redacts it from `repr` so it does not leak
+  into logs, but storing, rotating, and protecting that secret is the deployment's job.
+- **Safe defaults.** Timeouts default to 10s / 30s; `isolation` defaults to `snapshot`. The
+  deprecated `serializable` token normalizes to `snapshot` (AuraDB is not serializable, and
+  the connector does not upgrade it).
+- **Validation.** A missing address, a non-integer or non-positive timeout, or a TLS CA path
+  that does not exist raises `AuraValidationError` with a clear, secret-free message.
+- **SNI server name.** `server_name` is carried as the `tls_server_name` transport option; the
+  bundled TCP transport uses it as the TLS SNI server name. When unset, SNI is derived from the
+  address host as before.
+- **Inspect without connecting.** `profile.to_client_config()` returns the fully-resolved
+  `ClientConfig`. `ConnectionProfile` is a convenience helper, not a new client API — existing
+  `connect(...)` / `Client(...)` constructors are unchanged.
+
 ## Transactions
 
 The native backend supports `begin` / `commit` / `rollback` with **read-your-writes** against
@@ -256,3 +298,32 @@ typed `AggregateResult` (AuraDB v1.2.0). AuraDB v1.3.0 adds group-by aggregation
 best-effort query profile (`profile()`, surfaced as `AggregateResult.profile` / `QueryProfile`;
 every field is advisory and optional). Each is gated on the `group_by` / `query_profile`
 capability. See [QUERY_BUILDER.md](QUERY_BUILDER.md).
+
+## Capability UX (v0.8.0)
+
+`client.capabilities()` returns the backend's honest `BackendCapabilities` declaration. v0.8.0
+adds two ergonomics helpers alongside the existing `supports(...)`:
+
+```python
+caps = client.capabilities()
+
+if caps.supports("query_profile"):     # soft branch
+    ...
+
+caps.require("group_by")               # hard requirement; raises if missing
+
+summary = caps.describe()              # {"name", "supported", "unsupported"}
+```
+
+- **`supports(flag)`** returns a bool; an unknown flag name raises `ValueError` (it is a
+  programmer error, not a missing feature).
+- **`require(flag)`** raises `AuraBackendCapabilityError` when a known capability is not
+  provided, naming the backend and the missing capability in its `context` so callers branch on
+  capabilities instead of catching a generic failure.
+- **`describe()`** returns the backend name plus `supported` / `unsupported` lists (each a
+  subset of the capability flags, in declaration order) for display.
+
+These read the **current** capability payload and require no server change. A non-AuraDB
+backend will not claim AuraDB-specific analytics — e.g. a key/value backend reports
+`query_profile` and `group_by` as unsupported and `require("hybrid_search")` raises. See
+[COMPATIBILITY.md](COMPATIBILITY.md) and [BACKEND_CAPABILITY_MATRIX.md](BACKEND_CAPABILITY_MATRIX.md).

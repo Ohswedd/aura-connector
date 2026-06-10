@@ -81,11 +81,21 @@ The native backend is the primary target; ergonomics here come first.
   `QueryProfile`, and `Page[T]` (alias `SearchPage`) join the earlier facet/aggregate
   models.
 - [ ] More ergonomic schema / index declaration for search fields.
-- [ ] Better capability-introspection helpers around `client.capabilities()` —
-  clearer feature-negotiation output (v0.8.0).
+- [~] Better capability-introspection helpers around `client.capabilities()` —
+  v0.8.0 slice landed: `BackendCapabilities.require(flag)` (raises
+  `AuraBackendCapabilityError` naming the backend + missing capability) and
+  `describe()` (name plus supported/unsupported lists), alongside the existing
+  `supports(...)`. Reads the current payload; no server change. Tested in
+  `tests/unit/test_capabilities_ux.py`; example `examples/auradb_capabilities.py`.
 - [ ] More `EXPLAIN ANALYZE` / query-profile wrapper helpers.
 - [ ] Richer typed score / result models.
-- [ ] Connection-profile helpers for auth and TLS (v0.8.0).
+- [~] Connection-profile helpers for auth and TLS — v0.8.0 slice landed:
+  `ConnectionProfile` (frozen, env-driven via `from_env`, redacted token repr, TLS
+  CA validation, SNI server name, timeout/isolation knobs) plus `Client.from_profile`
+  / `Aura.from_profile`. Resolves through `parse_dsn` (no new connection behaviour);
+  `DEFAULT_ISOLATION` stays snapshot and `serializable` still aliases to snapshot.
+  Tested in `tests/unit/test_connection_profile.py`; example
+  `examples/auradb_connection_profile.py`.
 
 ## Search and ranking APIs
 
@@ -102,8 +112,16 @@ AuraDB server features.
   plus v0.7.0's public `Page[T]`, `client.resume_search(...)`, and `builder.page(...)`
   returning an opaque, persistable resume token (gated on `cursor_resume`).
 - [~] Highlight / snippet support — only if AuraDB adds it server-side.
-- [ ] Search relevance evaluation helper (v0.8.0).
-- [ ] Hybrid ranking presets / calibration helper (v0.8.0).
+- [~] Search relevance evaluation helper — v0.8.0 slice landed: `aura.search_quality`
+  parses AuraDB's `search eval` report into typed `SearchEvalReport` /
+  `SearchEvalMetrics` / `SearchEvalQueryResult` (with `from_json` / `from_dict` and
+  `[0,1]` metric validation). The connector parses the CLI's output; it does not run
+  the CLI or compute relevance. Tested in `tests/unit/test_search_quality.py`; example
+  `examples/auradb_search_eval_report.py`.
+- [~] Hybrid ranking presets / calibration helper — v0.8.0 slice landed: hybrid
+  reports parse with their fusion `weights` (`SearchEvalReport.is_hybrid` /
+  `.weights`), so a pipeline can read the AuraDB calibration output. Server-side
+  calibration is the AuraDB `search eval --mode hybrid` harness.
 - [ ] Result-scoring diagnostics (v0.8.0).
 - [ ] Better validation messages for search options.
 
@@ -116,7 +134,10 @@ Exact vector search ships today and remains the default and correctness baseline
   dataclass with `m` / `ef_construction` / `ef_search` and a `fallback` of
   `"exact"` (default) / `"error"`, gated on `hnsw_preview`). Exact search remains
   the default and correctness baseline; not production ANN.
-- [ ] Exact-vs-approximate comparison helper (v0.8.0).
+- [~] Exact-vs-approximate comparison helper — v0.8.0 slice landed:
+  `aura.search_quality.ExactAnnComparisonReport` parses AuraDB's `vector eval`
+  recall/latency report. The approximate path it describes is a preview, not
+  production ANN.
 - [ ] Batch vector-query helpers.
 - [ ] Vector validation utilities.
 
