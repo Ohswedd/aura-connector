@@ -21,15 +21,18 @@ backend by changing only the DSN. AuraDB is the native, high-performance target 
 Wire Protocol; the other backends make the same model and query API useful immediately on
 existing infrastructure.
 
-**Aura Connector v0.7.0 is the matching client for AuraDB v1.3.0**, building on the v1.2.x
-query ergonomics (aggregations, terms facets, cooperative query timeouts, the opt-in HNSW
-preview) and the v1.1.0 search and ranking features (`search_text` BM25, `search_vector`,
-`search_hybrid`). v0.7.0 adds, additively and backward compatibly: **group-by aggregation**
-(`group_by`), **approximate-vector (HNSW) preview options** including an `"exact"`/`"error"`
-fallback policy (`HnswOptions`), a **best-effort query profile** (`profile()` / `QueryProfile`),
-and **public ranked-search cursor resume** (`Page`/`SearchPage`, `client.resume_search`,
-`builder.page`). Each v1.3 feature is gated on a capability the AuraDB backend negotiates at
-handshake. Feature differences between backends are honest: search/ranking APIs require AuraDB
+**Aura Connector v0.8.0 is the matching client for AuraDB v1.4.0**, carrying forward the full
+v0.7.x feature set (group-by aggregation, the opt-in HNSW preview options with an
+`"exact"`/`"error"` fallback policy, the best-effort query profile, public ranked-search cursor
+resume) over the v1.1–v1.3 search, ranking, and query-ergonomics surface. v0.8.0 adds purely
+**client-side ergonomics**, with no wire-protocol change: **connection profiles**
+(`ConnectionProfile`, `ConnectionProfile.from_env`, `Client.from_profile` /
+`Aura.from_profile`, TLS CA and SNI/`server_name` wiring, and a token-redacting `repr`),
+**search-eval report parsing helpers** (`SearchEvalReport` / `SearchEvalMetrics` /
+`SearchEvalQueryResult` and the BM25/hybrid report models, which parse `auradb search eval`
+CLI output and do **not** run server-side CLI commands), and **capability require/describe
+helpers**. Each AuraDB feature is gated on a capability the backend negotiates at handshake.
+Feature differences between backends are honest: search/ranking APIs require AuraDB
 capabilities, and a backend that does not support a requested feature raises a structured
 capability error instead of pretending to support it.
 

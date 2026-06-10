@@ -8,8 +8,8 @@ Completed release history lives in [CHANGELOG.md](../CHANGELOG.md).
 
 The roadmap is written against the latest shipped release.
 
-- **Aura Connector v0.7.0** is the current stable release; it is tested with
-  **AuraDB v1.3.x** — see [COMPATIBILITY.md](COMPATIBILITY.md).
+- **Aura Connector v0.8.0** is the current stable release; it is tested with
+  **AuraDB v1.4.x** — see [COMPATIBILITY.md](COMPATIBILITY.md).
 - **`DEFAULT_ISOLATION` is `snapshot`.** The connector does not provide or claim
   serializable isolation.
 - **`"serializable"` is only a deprecated compatibility alias** mapped to snapshot
@@ -20,7 +20,7 @@ The roadmap is written against the latest shipped release.
 This stance is the baseline the roadmap builds on; it is context, not a list of
 deliverables.
 
-- **Aura Connector v0.7.0 is the matching connector for AuraDB v1.3.x** query
+- **Aura Connector v0.8.0 is the matching connector for AuraDB v1.4.x** query
   ergonomics, search, and ranking — see [COMPATIBILITY.md](COMPATIBILITY.md).
 - **The native AuraDB backend is the primary target** — see [AURADB.md](AURADB.md).
 - **Non-AuraDB backends support a subset** of features and raise a structured

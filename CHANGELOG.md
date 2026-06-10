@@ -7,6 +7,52 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-10
+
+Paired client for AuraDB v1.4.0. An **additive, backward-compatible** release that adds
+**client-side ergonomics only** — connection profiles, search-eval report parsing helpers,
+and capability UX helpers. The Aura Wire Protocol (AWP 1) is unchanged and **no server
+protocol change is required**; existing constructors are unchanged, and the connector stays
+compatible with the 1.3.x/1.2.x lines and older servers for their features. A v0.7.x connector
+also continues to work unchanged against AuraDB v1.4.0.
+
+> Transaction isolation remains **snapshot**. The connector does not provide or claim
+> serializable isolation; `"serializable"` is accepted only as a deprecated alias mapped to
+> snapshot semantics. There is no production HA abstraction and no production ANN claim.
+
+### Added
+
+- **Connection profiles.** New frozen `ConnectionProfile` dataclass bundling DSN/auth/TLS/pool
+  settings, with `ConnectionProfile.from_env(...)` (environment-driven), `Client.from_profile`
+  and `Aura.from_profile` constructors, TLS CA file wiring, and TLS `server_name`/SNI wiring for
+  the bundled TCP transport. Its `repr` redacts tokens. `ConnectionProfile` is a convenience
+  for assembling connection settings — it is **not** a secret manager.
+- **Search-eval report parsing helpers.** New `aura.search_quality` module with typed
+  `SearchEvalReport`, `SearchEvalMetrics`, `SearchEvalQueryResult`, and BM25/hybrid report
+  models, plus an exact-vs-approximate comparison report. These **parse the output of the
+  AuraDB `auradb search eval` CLI** (`SearchEvalReport.from_json(...)`); they do **not** run
+  server-side CLI commands or compute relevance themselves.
+- **Capability UX helpers.** `BackendCapabilities.require(flag)` (raising a clear
+  `AuraCapabilityError`) and `.describe()` for human-readable capability summaries.
+- **Examples.** `examples/auradb_connection_profile.py`, `examples/auradb_search_eval_report.py`,
+  and `examples/auradb_capabilities.py`.
+
+### Changed
+
+- `__version__` and the package version are bumped to 0.8.0.
+
+### Unchanged
+
+- `DEFAULT_ISOLATION` remains `snapshot`; `"serializable"` remains a deprecated alias to
+  snapshot only. No unbounded retry/failover automation. AuraDB-only features still require the
+  server to advertise the matching capability.
+
+### Known limitations
+
+- `ConnectionProfile` is not a secret manager.
+- Native-accel SNI override remains a follow-up where not yet implemented.
+- The search-eval helpers parse AuraDB CLI output; they do not run server-side CLI commands.
+
 ## [0.7.0] - 2026-06-09
 
 Paired client for AuraDB v1.3.0. An **additive, backward-compatible** release that surfaces

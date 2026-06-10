@@ -56,7 +56,7 @@ def _as_int(value: Any, field: str) -> int:
             f"field {field!r} must be an integer, got {type(value).__name__}",
             code="validation_error",
         )
-    return value
+    return int(value)
 
 
 def _as_str(value: Any, field: str) -> str:
