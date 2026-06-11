@@ -78,6 +78,11 @@ class Hydrator:
         rank = row.get("__rank__")
         if rank is not None:
             instance.__dict__["__rank__"] = int(rank)
+        # Opt-in search snippets/highlights (AuraDB v1.5.0). Stored verbatim; the
+        # typed view is built lazily by ``aura.search_snippets(instance)``.
+        snippets = row.get("__snippets__")
+        if snippets:
+            instance.__dict__["__snippets__"] = snippets
         return instance
 
     @staticmethod

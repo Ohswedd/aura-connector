@@ -20,6 +20,34 @@ against the in-memory reference server (and a loopback TCP server). Categories:
 `pytest-asyncio` is configured in `auto` mode (`pyproject.toml`), so `async def test_*`
 functions run directly. Warnings are errors (`filterwarnings = ["error"]`).
 
+### Search analyzers & snippets (v0.9.0)
+
+`tests/unit/test_analyzers.py` covers the analyzer ergonomics: the `AnalyzerOptions`
+model (including `english_basic`), the `search_text(analyzer=…)` / `.analyzer(…)`
+query-builder helpers, client-side name validation, the **`keyword` analyzer on
+hybrid search** (`search_hybrid(..., analyzer="keyword")` and the chained
+`.analyzer("keyword")` form forward over the wire; a default hybrid analyzer is
+omitted; capability gating and a v1.5-server live-success path), the `query_analyzers` /
+`search_snippets` capability flags, the native backend's **live wire forwarding**
+(`_translate_select` puts a non-default analyzer on the wire — for both `text_search`
+and `hybrid` — and omits a `default` one) and **capability negotiation** (the
+handshake-advertised `query_analyzers` drives `capabilities()`), end-to-end capability
+gating against the reference engine (a non-default analyzer raises
+`AuraCapabilityError`, the default analyzer works), the `english_basic` `lens` term
+riding the IR verbatim, the new `SearchEvalReport.analyzer` field, and
+`AnalyzerComparisonReport` parsing.
+
+`tests/unit/test_snippets.py` covers the snippet surface: the `.snippets(fields=…)`
+builder and IR, the live wire forwarding/decoding, the typed `SearchSnippet` /
+`SearchSnippetFragment` / `HighlightRange` models (with byte→character offset
+conversion so `frag.text[r.start:r.end]` slices correctly), missing-snippet safety,
+the plain-text/no-HTML claim, and `search_snippets` capability gating.
+
+**Live conformance** runs against a real AuraDB v1.5.0 server from the AuraDB repo
+(`tests/conformance/python/run_connector_analyzers.py`,
+`run_connector_snippets.py`): they exercise the analyzer and snippet surface over the
+wire and fail (do not skip) if the server does not advertise the required capability.
+
 ## Validation gate
 
 ```bash

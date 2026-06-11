@@ -24,6 +24,8 @@ from typing import Any
 from .errors import AuraValidationError
 
 __all__ = [
+    "AnalyzerComparisonReport",
+    "AnalyzerLeg",
     "Bm25Params",
     "ExactAnnComparisonReport",
     "HybridWeights",
@@ -174,6 +176,9 @@ class SearchEvalReport:
     warnings: tuple[str, ...]
     bm25: Bm25Params | None = None
     weights: HybridWeights | None = None
+    #: The query-time analyzer the report was produced under (AuraDB v1.5.0+).
+    #: Pre-v1.5 reports omit the field; it then defaults to ``"default"``.
+    analyzer: str = "default"
 
     @property
     def is_hybrid(self) -> bool:
@@ -214,6 +219,7 @@ class SearchEvalReport:
             weights=(
                 HybridWeights.from_dict(weights_raw) if isinstance(weights_raw, Mapping) else None
             ),
+            analyzer=_as_str(data.get("analyzer", "default"), "analyzer"),
         )
 
     @classmethod
@@ -271,6 +277,74 @@ class ExactAnnComparisonReport:
 
     @classmethod
     def from_json(cls, source: str | bytes | PathLike[str]) -> ExactAnnComparisonReport:
+        """Parse from a JSON string/bytes or a path to a JSON file."""
+        return cls.from_dict(_load_json(source))
+
+
+@dataclass(frozen=True)
+class AnalyzerLeg:
+    """One analyzer's leg in an analyzer-comparison report: its name and metrics."""
+
+    analyzer: str
+    metrics: SearchEvalMetrics
+    warnings: tuple[str, ...] = ()
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> AnalyzerLeg:
+        if not isinstance(data, Mapping):
+            raise AuraValidationError("analyzer leg must be a JSON object", code="validation_error")
+        warnings_raw = data.get("warnings", [])
+        if not isinstance(warnings_raw, list) or not all(isinstance(w, str) for w in warnings_raw):
+            raise AuraValidationError(
+                "leg.warnings must be a list of strings", code="validation_error"
+            )
+        return cls(
+            analyzer=_as_str(_require(data, "analyzer", "leg"), "analyzer"),
+            metrics=SearchEvalMetrics.from_dict(_require(data, "metrics", "leg")),
+            warnings=tuple(warnings_raw),
+        )
+
+
+@dataclass(frozen=True)
+class AnalyzerComparisonReport:
+    """A parsed ``auradb search eval compare-analyzers`` report (AuraDB v1.5.0+).
+
+    Holds one :class:`AnalyzerLeg` per analyzer evaluated over the same dataset, so
+    a pipeline can compare analyzer presets side by side. As with all relevance
+    output the metrics are dataset-specific regression signals, not a universal
+    benchmark.
+    """
+
+    dataset: str
+    mode: str
+    k: int
+    analyzers: tuple[AnalyzerLeg, ...]
+
+    def metrics_for(self, analyzer: str) -> SearchEvalMetrics | None:
+        """The metrics for ``analyzer``, or ``None`` if it is not in the report."""
+        for leg in self.analyzers:
+            if leg.analyzer == analyzer:
+                return leg.metrics
+        return None
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> AnalyzerComparisonReport:
+        if not isinstance(data, Mapping):
+            raise AuraValidationError(
+                "compare-analyzers report must be a JSON object", code="validation_error"
+            )
+        legs_raw = _require(data, "analyzers", "report")
+        if not isinstance(legs_raw, list):
+            raise AuraValidationError("report.analyzers must be a list", code="validation_error")
+        return cls(
+            dataset=_as_str(_require(data, "dataset", "report"), "dataset"),
+            mode=_as_str(_require(data, "mode", "report"), "mode"),
+            k=_as_int(_require(data, "k", "report"), "k"),
+            analyzers=tuple(AnalyzerLeg.from_dict(leg) for leg in legs_raw),
+        )
+
+    @classmethod
+    def from_json(cls, source: str | bytes | PathLike[str]) -> AnalyzerComparisonReport:
         """Parse from a JSON string/bytes or a path to a JSON file."""
         return cls.from_dict(_load_json(source))
 

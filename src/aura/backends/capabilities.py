@@ -41,6 +41,8 @@ CAPABILITY_FLAGS: tuple[str, ...] = (
     "query_profile",
     "hnsw_preview",
     "cursor_resume",
+    "query_analyzers",
+    "search_snippets",
 )
 
 
@@ -74,6 +76,15 @@ class BackendCapabilities:
     query_profile: bool = False
     hnsw_preview: bool = False
     cursor_resume: bool = False
+    #: Live over-the-wire query-time analyzer selection on ranked text search
+    #: (AuraDB v1.5.0+). Negotiated from the server's advertised ``query_analyzers``
+    #: capability; a non-default analyzer against a server without it raises a
+    #: capability error rather than being silently dropped.
+    query_analyzers: bool = False
+    #: Live, opt-in server-produced search snippets/highlights on ranked text search
+    #: (AuraDB v1.5.0+). Negotiated from the server's advertised ``search_snippets``
+    #: capability.
+    search_snippets: bool = False
 
     def supports(self, capability: str) -> bool:
         """Return whether ``capability`` (one of :data:`CAPABILITY_FLAGS`) is supported."""

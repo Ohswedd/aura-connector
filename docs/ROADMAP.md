@@ -8,8 +8,8 @@ Completed release history lives in [CHANGELOG.md](../CHANGELOG.md).
 
 The roadmap is written against the latest shipped release.
 
-- **Aura Connector v0.8.0** is the current stable release; it is tested with
-  **AuraDB v1.4.x** — see [COMPATIBILITY.md](COMPATIBILITY.md).
+- **Aura Connector v0.9.0** is the current stable release; it is tested with
+  **AuraDB v1.5.x** — see [COMPATIBILITY.md](COMPATIBILITY.md).
 - **`DEFAULT_ISOLATION` is `snapshot`.** The connector does not provide or claim
   serializable isolation.
 - **`"serializable"` is only a deprecated compatibility alias** mapped to snapshot
@@ -20,8 +20,8 @@ The roadmap is written against the latest shipped release.
 This stance is the baseline the roadmap builds on; it is context, not a list of
 deliverables.
 
-- **Aura Connector v0.8.0 is the matching connector for AuraDB v1.4.x** query
-  ergonomics, search, and ranking — see [COMPATIBILITY.md](COMPATIBILITY.md).
+- **Aura Connector v0.9.0 is the matching connector for AuraDB v1.5.x** query
+  ergonomics, search, ranking, analyzers, and snippets — see [COMPATIBILITY.md](COMPATIBILITY.md).
 - **The native AuraDB backend is the primary target** — see [AURADB.md](AURADB.md).
 - **Non-AuraDB backends support a subset** of features and raise a structured
   `AuraCapabilityError` for unsupported search / ranking — they are never silently
@@ -41,32 +41,56 @@ Items track AuraDB server capabilities where relevant: connector search / vector
 work generally lands once the AuraDB server exposes the matching server-side
 feature.
 
-## Target: Aura Connector v0.8.0 — Production operability and search quality
+## Shipped: Aura Connector v0.8.0 — Production operability and search quality
 
-The next big release pairs with **AuraDB v1.4.0**. It focuses on **ergonomic
-production single-node connection workflows**, **search and vector quality helpers**,
-and **clearer capability UX** — not on production HA automation, unbounded
-retry/failover, all-backend parity for AuraDB-only analytics, or production ANN
-claims (those stay in "Later / not v0.8.0 by default" and "Not currently planned").
-`DEFAULT_ISOLATION` remains `snapshot`.
+v0.8.0 is **shipped** (current stable) and pairs with **AuraDB v1.4.x**. It
+focused on **ergonomic production single-node connection workflows**, **search and
+vector quality helpers**, and **clearer capability UX** — not on production HA
+automation, unbounded retry/failover, all-backend parity for AuraDB-only
+analytics, or production ANN claims. `DEFAULT_ISOLATION` remains `snapshot` and
+`"serializable"` remains a deprecated alias mapped to snapshot.
 
-Planned scope (detailed per category in the sections below):
+Delivered in v0.8.0 (per-item tracking lives in the category sections below):
 
-- **Ergonomic production connection profiles:** auth/TLS examples, environment-based
-  profiles, and safer error messages.
-- **Search quality helpers:** a relevance evaluation helper, a hybrid ranking
-  calibration helper, an exact-vs-ANN comparison helper, and result-scoring
-  diagnostics.
-- **Typed operational models:** SLO/report model helpers where useful, richer query
-  profile wrappers, and restore/backup smoke helpers where appropriate.
-- **Docs / examples:** executable examples for production single-node
-  auth/TLS/search/vector workflows, unsupported-feature examples, and a v1.4
-  compatibility matrix.
-- **Capability UX:** clearer feature-negotiation output and better unsupported
-  backend guidance.
+- **Connection profiles:** `ConnectionProfile`, `ConnectionProfile.from_env`,
+  `Client.from_profile` / `Aura.from_profile`, a token-redacting profile repr, and
+  TLS CA / `server_name` wiring.
+- **Search-quality helpers:** `SearchEvalReport` / `SearchEvalMetrics` /
+  `SearchEvalQueryResult` parsing of AuraDB's `search eval` report, hybrid-weight
+  parsing, and an `ExactAnnComparisonReport` for `vector eval` output.
+- **Capability UX:** `BackendCapabilities.require` / `describe` and worked
+  search-quality helper examples.
+
+## Shipped: Aura Connector v0.9.0 — Live search analyzers and snippet ergonomics
+
+v0.9.0 is **shipped** (current stable) and pairs with **AuraDB v1.5.x**. It adds
+**analyzer option models** matching AuraDB v1.5 capabilities, **query-builder analyzer
+helpers**, and **typed snippet/highlight result models** — all additive, without
+breaking the existing search API. The analyzer/snippet helpers raise a structured
+`AuraCapabilityError` when the backend or server does not support them; non-AuraDB
+backends are never claimed to support AuraDB analyzers. `DEFAULT_ISOLATION` stays
+`snapshot` and the `serializable` alias is unchanged.
+
+Delivered in v0.9.0:
+
+- `AnalyzerOptions` and `search_text(..., analyzer=...)`
+- query-builder `.analyzer(...)` helper and hybrid analyzer request support
+- capability-gated `query_analyzers` support
+- snippet request helpers and typed `SearchSnippet` / `SearchSnippetFragment` /
+  `HighlightRange` result models with byte-to-character range handling
+- analyzer-aware and analyzer-comparison search-eval report parsing
+- examples for analyzer-aware and snippet search
+- live analyzer and snippet conformance support
+
+Not in v0.9.0 by default:
+
+- production HA automation
+- unbounded automatic retries
+- all-backend parity for AuraDB-only search features
+- production ANN claims
 
 The category sections below carry the per-item tracking; this section is the
-v0.8.0 lens over them.
+v0.9.0 lens over them.
 
 ## AuraDB native experience
 
@@ -111,7 +135,14 @@ AuraDB server features.
 - [x] Ranked pagination + public cursor resume — shipped: `QueryBuilder.search_pages()`
   plus v0.7.0's public `Page[T]`, `client.resume_search(...)`, and `builder.page(...)`
   returning an opaque, persistable resume token (gated on `cursor_resume`).
-- [~] Highlight / snippet support — only if AuraDB adds it server-side.
+- [~] Analyzer / tokenizer API helpers — **v0.9.0 target**: analyzer option models
+  matching AuraDB v1.5 presets, a query-builder analyzer helper, and search-eval
+  report parsing for analyzer comparisons. Gated on the AuraDB server advertising
+  analyzer capabilities; degrades to `AuraCapabilityError` otherwise and never
+  claims analyzer support on non-AuraDB backends.
+- [~] Highlight / snippet support — **v0.9.0 target**, only if AuraDB adds it
+  server-side; typed snippet/highlight result models gated on the server's snippet
+  capability. The connector does not claim snippets the server cannot produce.
 - [~] Search relevance evaluation helper — v0.8.0 slice landed: `aura.search_quality`
   parses AuraDB's `search eval` report into typed `SearchEvalReport` /
   `SearchEvalMetrics` / `SearchEvalQueryResult` (with `from_json` / `from_dict` and
@@ -190,11 +221,11 @@ improves the helpers around that model without weakening its safety.
 - [ ] Packaging-metadata checks.
 - [ ] More executable production single-node auth/TLS/search/vector examples (v0.8.0).
 
-## Later / not v0.8.0 by default
+## Later / not v0.9.0 by default
 
-These are real future directions, but they are explicitly **out of v0.8.0 scope**
-unless intentionally re-scoped. They do not weaken the v0.8.0 production-connection
-and search-quality focus.
+These are real future directions, but they are explicitly **out of v0.9.0 scope**
+unless intentionally re-scoped. They do not weaken the v0.9.0 analyzer and
+snippet-ergonomics focus.
 
 - Production-HA automation.
 - Unbounded retry / failover abstraction.

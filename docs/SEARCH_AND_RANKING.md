@@ -240,3 +240,99 @@ for q in report.per_query:                         # SearchEvalQueryResult
 The metrics are **dataset-specific regression signals, not universal benchmarks**, and the
 helpers only parse — they make no relevance claim of their own. See
 `examples/auradb_search_eval_report.py`.
+
+## Search analyzers (v0.9.0 / AuraDB v1.5.0)
+
+AuraDB v1.5.0 adds **live** query-time analyzer presets — `default`, `simple`,
+`ascii_fold`, `keyword`, and `english_basic`. The connector names an analyzer on a
+ranked search, validates the name client-side against `aura.ANALYZER_PRESETS`, and
+sends it over the wire to a v1.5 server:
+
+```python
+from aura import AnalyzerOptions
+
+AnalyzerOptions("simple")          # validated; AnalyzerOptions("bogus") raises AuraQueryError
+
+# Two equivalent ways to name an analyzer on a ranked search:
+q1 = client.search(Doc).search_text("body", "backup restore", analyzer="simple")
+q2 = client.search(Doc).search_text("body", "backup restore").analyzer("simple")
+
+# The same presets are available on hybrid search; `keyword` gives the text side
+# whole-field exact-match semantics while the vector side still contributes:
+q3 = client.search(Doc).search_hybrid("body", "backup restore", "embedding", vec, analyzer="keyword")
+q4 = client.search(Doc).search_hybrid("body", "backup restore", "embedding", vec).analyzer("keyword")
+```
+
+`default` (or omitting the analyzer) is the v1.x behavior and is left out of the
+query IR entirely, so existing queries are byte-for-byte unchanged.
+
+`keyword` is valid on both `search_text` and `search_hybrid`; on a hybrid query its
+whole-field text matches are fused with the vector signal as usual.
+
+`english_basic` is a small built-in helper (lowercase + a fixed stopword list + a
+conservative plural fold — e.g. `backups`/`queries` fold but singulars like `lens`,
+`status`, and `class` are left intact), **not** a stemmer or full NLP.
+
+**Capability gating (honest, never silent).** A v1.5 server advertises the
+`query_analyzers` capability and the connector negotiates it from the handshake.
+A non-default analyzer against a server that does **not** advertise it raises
+`AuraCapabilityError` before the request is sent — the connector never silently drops
+it or pretends a backend applied an analyzer it cannot. Non-AuraDB backends are
+likewise never claimed to support AuraDB analyzers. An unknown analyzer name raises
+`AuraQueryError` client-side. See `examples/auradb_analyzer_search.py`.
+
+### Analyzer report helpers
+
+`search eval --analyzer` records the effective analyzer on the report, and
+`search eval compare-analyzers` emits a side-by-side comparison:
+
+```python
+from aura import SearchEvalReport, AnalyzerComparisonReport
+
+report = SearchEvalReport.from_json("eval.json")
+print(report.analyzer)             # "default" for pre-v1.5 reports
+
+cmp = AnalyzerComparisonReport.from_json("compare.json")
+for leg in cmp.analyzers:          # AnalyzerLeg: analyzer + metrics
+    print(leg.analyzer, leg.metrics.recall_at_k)
+print(cmp.metrics_for("ascii_fold"))
+```
+
+As always these metrics are **fixture-specific regression signals, not universal
+benchmarks**. See `examples/auradb_search_eval_analyzers.py`.
+
+### Snippets / highlights
+
+AuraDB v1.5.0 produces **live, opt-in** plain-text snippets over the wire. Request
+them on a ranked search and read the typed models back:
+
+```python
+from aura import search_snippets
+
+rows = await (
+    client.search(Doc)
+    .search_text("body", "restore backup")
+    .snippets(fields=["body"], max_fragments=2)
+    .all()
+)
+for row in rows:
+    for snip in search_snippets(row):      # SearchSnippet(field, fragments)
+        for frag in snip.fragments:        # SearchSnippetFragment(text, ranges)
+            for r in frag.ranges:          # HighlightRange(start, end) into frag.text
+                print(snip.field, frag.text[r.start : r.end])
+```
+
+Rules the connector relies on (enforced by the server):
+
+- **Opt-in only** — a search without `.snippets(...)` returns no snippets;
+  `search_snippets(row)` is then an empty tuple, never an error.
+- **Capability-gated** — a snippet request requires the server's `search_snippets`
+  capability (negotiated from the handshake) and otherwise raises
+  `AuraCapabilityError`. It is never silently dropped.
+- **Field-allowlisted** — only the fields you name are eligible; an internal or
+  unrequested field is never returned.
+- **Plain text** — snippet text is plain text and the ranges are byte offsets into
+  the fragment text; the connector makes **no HTML/markup claim**. Escape it yourself
+  when rendering to HTML.
+
+See `examples/auradb_snippet_search.py`.
