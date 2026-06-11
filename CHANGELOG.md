@@ -7,6 +7,56 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-11
+
+Paired client for AuraDB v1.5.0. An **additive, backward-compatible** release that adds
+**live analyzer and snippet search ergonomics** for AuraDB. The Aura Wire Protocol (AWP 1) is
+unchanged and **no server protocol change is required**; existing constructors are unchanged,
+and the connector stays compatible with the 1.4.x/1.3.x lines and older servers for their
+features. A v0.8.x connector also continues to work unchanged against AuraDB v1.5.0 — it simply
+does not request analyzer or snippet fields. The new AuraDB-only paths are **capability-gated**
+on the server's `query_analyzers` / `search_snippets` capabilities.
+
+> Transaction isolation remains **snapshot**. The connector does not provide or claim
+> serializable isolation; `"serializable"` is accepted only as a deprecated alias mapped to
+> snapshot semantics. There is no production HA abstraction and no production ANN claim.
+
+### Added
+
+- **Analyzer search ergonomics.** `AnalyzerOptions`, `search_text(..., analyzer=...)`, and a
+  `.analyzer(...)` query-builder method. Hybrid search accepts analyzer requests. The analyzer
+  paths are gated on the server's `query_analyzers` capability.
+- **Snippet search ergonomics.** Snippet request helpers and typed `SearchSnippet`,
+  `SearchSnippetFragment`, and `HighlightRange` result models, with snippet result parsing.
+  Highlight ranges are converted from server byte offsets to character offsets for correct
+  Python string slicing. The snippet paths are gated on the server's `search_snippets`
+  capability.
+- **Analyzer-aware search-eval report parsing.** `aura.search_quality` parses analyzer-tagged
+  search-eval reports and analyzer comparison reports.
+- **Examples.** `examples/auradb_analyzer_search.py`, `examples/auradb_snippet_search.py`, and
+  `examples/auradb_search_eval_analyzers.py`.
+- **Conformance.** Live analyzer and snippet conformance support against an AuraDB v1.5.0 server.
+
+### Changed
+
+- `__version__` and the package version are bumped to 0.9.0.
+
+### Unchanged
+
+- `DEFAULT_ISOLATION` remains `snapshot`; `"serializable"` remains a deprecated alias to
+  snapshot only. No unbounded retry/failover automation, and no production HA abstraction.
+  AuraDB-only search features still require the server to advertise the matching capability.
+
+### Known limitations
+
+- `ConnectionProfile` is not a secret manager.
+- Analyzer and snippet features require **AuraDB v1.5+** capabilities (`query_analyzers` /
+  `search_snippets`); against an older server or an unsupported backend, the AuraDB-only search
+  paths raise a structured capability error rather than silently degrading.
+- `english_basic` is deterministic and small — it is **not** full NLP.
+- Relevance scores parsed from search-eval reports are fixture-specific regression signals, not
+  universal benchmarks.
+
 ## [0.8.0] - 2026-06-10
 
 Paired client for AuraDB v1.4.0. An **additive, backward-compatible** release that adds

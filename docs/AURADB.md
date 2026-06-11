@@ -5,34 +5,35 @@ The **native AuraDB backend** speaks the Aura Wire Protocol version 1 (AWP 1) to
 performs the AWP handshake (with optional static-token authentication), translates the
 connector's canonical Query IR to the server's Query IR, and decodes results back into your
 typed models. AWP 1 with auth and TLS first shipped in AuraDB v0.2.0, so **v0.2.0 is the
-minimum native server version**; the current coordinated server is AuraDB v1.4.0 (see
+minimum native server version**; the current coordinated server is AuraDB v1.5.0 (see
 [COMPATIBILITY.md](COMPATIBILITY.md)).
 
-This connector release (v0.8.0) is the paired client for AuraDB v1.4.0. It carries forward the
-full v0.7.x query surface — group-by aggregation (`group_by`), approximate-vector (HNSW)
-preview options including a `fallback` policy (`HnswOptions`), a best-effort query profile
-(`profile()` / `QueryProfile`), and public ranked-search cursor resume (`Page`/`SearchPage`,
-`client.resume_search`, `builder.page`) — each still gated on a capability flag (`group_by`,
-`query_profile`, `hnsw_preview`, `cursor_resume`) the native backend negotiates at handshake;
-a server that does not advertise a capability gets an `AuraCapabilityError` rather than a
-silently-wrong result. v0.8.0 adds purely **client-side ergonomics with no wire-protocol
-change**: connection profiles (`ConnectionProfile`, `from_env`, `Client.from_profile` /
-`Aura.from_profile`, TLS CA and SNI wiring, token-redacting `repr`), search-eval report parsing
-helpers (`SearchEvalReport` / `SearchEvalMetrics` / `SearchEvalQueryResult` and BM25/hybrid
-report models, which parse `auradb search eval` CLI output and do not run server-side CLI
-commands), and capability require/describe helpers. The default transaction isolation remains
-`snapshot`.
+This connector release (v0.9.0) is the paired client for AuraDB v1.5.0. It carries forward the
+full v0.8.x surface — connection profiles, search-eval report parsing, capability
+require/describe helpers, group-by aggregation (`group_by`), approximate-vector (HNSW) preview
+options including a `fallback` policy (`HnswOptions`), a best-effort query profile (`profile()`
+/ `QueryProfile`), and public ranked-search cursor resume (`Page`/`SearchPage`,
+`client.resume_search`, `builder.page`) — each still gated on a capability flag the native
+backend negotiates at handshake; a server that does not advertise a capability gets an
+`AuraCapabilityError` rather than a silently-wrong result. v0.9.0 adds **live analyzer and
+snippet search ergonomics with no wire-protocol change**: `AnalyzerOptions`,
+`search_text(..., analyzer=...)` and a `.analyzer(...)` builder method, hybrid analyzer request
+support, snippet request helpers with typed `SearchSnippet` / `SearchSnippetFragment` /
+`HighlightRange` result models (byte-to-character range handling for Python slicing), and
+analyzer-aware search-eval report parsing — all gated on the server's `query_analyzers` /
+`search_snippets` capabilities. The default transaction isolation remains `snapshot`.
 
 The same typed model and query API you use with every other backend works unchanged — only
 the DSN changes.
 
-> **Coordinated v1.4.0 line.** AuraDB v1.4.0 is a production operability and search-quality
-> release: server-side single-node operability drills and recovery confidence (backup, verify,
-> restore-to-fresh, snapshot rollback, disk/I/O drills) plus the `auradb search eval` relevance
-> evaluation toolchain. That work is purely operational/evaluation tooling and requires **no**
-> connector API or protocol change — a v0.7.x connector keeps working unchanged against AuraDB
-> v1.4.0. The paired connector v0.8.0 adds the client-side ergonomics described above. Single-node
-> remains the production-supported mode; there is no production HA or production ANN claim.
+> **Coordinated v1.5.0 line.** AuraDB v1.5.0 takes search-quality work live over the wire:
+> a deterministic analyzer framework with query-time analyzer selection (the `query_analyzers`
+> capability) and opt-in plain-text snippets/highlights (the `search_snippets` capability). The
+> features are negotiated additively, so a v0.8.x connector keeps working unchanged against
+> AuraDB v1.5.0 — it simply does not request analyzer or snippet fields. The paired connector
+> v0.9.0 adds the analyzer/snippet ergonomics described above. Single-node remains the
+> production-supported mode; there is no production HA or production ANN claim, and `english_basic`
+> is a small deterministic analyzer, not full NLP.
 
 ## DSN schemes
 

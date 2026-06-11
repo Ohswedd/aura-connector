@@ -8,8 +8,8 @@ Completed release history lives in [CHANGELOG.md](../CHANGELOG.md).
 
 The roadmap is written against the latest shipped release.
 
-- **Aura Connector v0.8.0** is the current stable release; it is tested with
-  **AuraDB v1.4.x** — see [COMPATIBILITY.md](COMPATIBILITY.md).
+- **Aura Connector v0.9.0** is the current stable release; it is tested with
+  **AuraDB v1.5.x** — see [COMPATIBILITY.md](COMPATIBILITY.md).
 - **`DEFAULT_ISOLATION` is `snapshot`.** The connector does not provide or claim
   serializable isolation.
 - **`"serializable"` is only a deprecated compatibility alias** mapped to snapshot
@@ -20,8 +20,8 @@ The roadmap is written against the latest shipped release.
 This stance is the baseline the roadmap builds on; it is context, not a list of
 deliverables.
 
-- **Aura Connector v0.8.0 is the matching connector for AuraDB v1.4.x** query
-  ergonomics, search, and ranking — see [COMPATIBILITY.md](COMPATIBILITY.md).
+- **Aura Connector v0.9.0 is the matching connector for AuraDB v1.5.x** query
+  ergonomics, search, ranking, analyzers, and snippets — see [COMPATIBILITY.md](COMPATIBILITY.md).
 - **The native AuraDB backend is the primary target** — see [AURADB.md](AURADB.md).
 - **Non-AuraDB backends support a subset** of features and raise a structured
   `AuraCapabilityError` for unsupported search / ranking — they are never silently
@@ -61,25 +61,26 @@ Delivered in v0.8.0 (per-item tracking lives in the category sections below):
 - **Capability UX:** `BackendCapabilities.require` / `describe` and worked
   search-quality helper examples.
 
-## Target: Aura Connector v0.9.0 — Search analyzers and snippet ergonomics
+## Shipped: Aura Connector v0.9.0 — Live search analyzers and snippet ergonomics
 
-The next big release pairs with **AuraDB v1.5.0**. It adds **analyzer option
-models** matching AuraDB v1.5 capabilities, **query-builder analyzer helpers**, and
-**typed snippet/highlight result models** if AuraDB ships snippets — all additive,
-without breaking the existing search API. Analyzer/snippet helpers degrade to a
-structured `AuraCapabilityError` when the backend or server does not support them;
-non-AuraDB backends are never claimed to support AuraDB analyzers. `DEFAULT_ISOLATION`
-stays `snapshot` and the `serializable` alias is unchanged.
+v0.9.0 is **shipped** (current stable) and pairs with **AuraDB v1.5.x**. It adds
+**analyzer option models** matching AuraDB v1.5 capabilities, **query-builder analyzer
+helpers**, and **typed snippet/highlight result models** — all additive, without
+breaking the existing search API. The analyzer/snippet helpers raise a structured
+`AuraCapabilityError` when the backend or server does not support them; non-AuraDB
+backends are never claimed to support AuraDB analyzers. `DEFAULT_ISOLATION` stays
+`snapshot` and the `serializable` alias is unchanged.
 
-Planned scope:
+Delivered in v0.9.0:
 
-- analyzer option models matching AuraDB v1.5 capabilities
-- query builder helpers for analyzer presets
-- typed snippet/highlight result models if AuraDB supports snippets
-- search eval report parsing for analyzer comparisons
-- examples for analyzer-aware search
-- clearer capability errors for analyzer/snippet support
-- docs for AuraDB-only search features and unsupported backends
+- `AnalyzerOptions` and `search_text(..., analyzer=...)`
+- query-builder `.analyzer(...)` helper and hybrid analyzer request support
+- capability-gated `query_analyzers` support
+- snippet request helpers and typed `SearchSnippet` / `SearchSnippetFragment` /
+  `HighlightRange` result models with byte-to-character range handling
+- analyzer-aware and analyzer-comparison search-eval report parsing
+- examples for analyzer-aware and snippet search
+- live analyzer and snippet conformance support
 
 Not in v0.9.0 by default:
 

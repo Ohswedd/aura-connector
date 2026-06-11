@@ -21,17 +21,19 @@ backend by changing only the DSN. AuraDB is the native, high-performance target 
 Wire Protocol; the other backends make the same model and query API useful immediately on
 existing infrastructure.
 
-**Aura Connector v0.8.0 is the matching client for AuraDB v1.4.0**, carrying forward the full
-v0.7.x feature set (group-by aggregation, the opt-in HNSW preview options with an
+**Aura Connector v0.9.0 is the matching client for AuraDB v1.5.0**, carrying forward the full
+v0.8.x feature set (connection profiles, search-eval report parsing, capability
+require/describe helpers, group-by aggregation, the opt-in HNSW preview options with an
 `"exact"`/`"error"` fallback policy, the best-effort query profile, public ranked-search cursor
-resume) over the v1.1–v1.3 search, ranking, and query-ergonomics surface. v0.8.0 adds purely
-**client-side ergonomics**, with no wire-protocol change: **connection profiles**
-(`ConnectionProfile`, `ConnectionProfile.from_env`, `Client.from_profile` /
-`Aura.from_profile`, TLS CA and SNI/`server_name` wiring, and a token-redacting `repr`),
-**search-eval report parsing helpers** (`SearchEvalReport` / `SearchEvalMetrics` /
-`SearchEvalQueryResult` and the BM25/hybrid report models, which parse `auradb search eval`
-CLI output and do **not** run server-side CLI commands), and **capability require/describe
-helpers**. Each AuraDB feature is gated on a capability the backend negotiates at handshake.
+resume) over the v1.1–v1.4 search, ranking, and query-ergonomics surface. v0.9.0 adds
+**live analyzer and snippet search ergonomics** for AuraDB: `AnalyzerOptions`,
+`search_text(..., analyzer=...)` and a `.analyzer(...)` query-builder method, hybrid analyzer
+request support, **snippet request helpers** with typed `SearchSnippet` /
+`SearchSnippetFragment` / `HighlightRange` result models (including byte-to-character range
+handling for Python string slicing), and **analyzer-aware search-eval report parsing**. These
+AuraDB-only paths are **capability-gated** on the server's `query_analyzers` /
+`search_snippets` capabilities, with no wire-protocol change. Each AuraDB feature is gated on a
+capability the backend negotiates at handshake.
 Feature differences between backends are honest: search/ranking APIs require AuraDB
 capabilities, and a backend that does not support a requested feature raises a structured
 capability error instead of pretending to support it.
