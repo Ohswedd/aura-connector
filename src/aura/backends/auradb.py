@@ -17,8 +17,10 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator, Iterable
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from ..analyzers import requested_analyzer
 from ..config import ClientConfig
 from ..errors import (
     AuraAuthenticationError,
@@ -151,13 +153,31 @@ class ProtocolBackend(Backend):
         self._metrics = metrics
         self._telemetry = telemetry
         self._request_counter = 0
+        # The server's advertised capability names, learned from the handshake ack.
+        # ``None`` until a successful handshake; once known, the v1.5 additive
+        # features (analyzers, snippets) are gated on what the server actually
+        # advertises rather than optimistically assumed.
+        self._server_caps: set[str] | None = None
 
     @property
     def transport(self) -> Transport:
         return self._transport
 
     def capabilities(self) -> BackendCapabilities:
-        return _AURADB_CAPABILITIES
+        srv = self._server_caps
+        if srv is None:
+            # Pre-handshake / offline: the v1.5 additive features are not yet
+            # negotiable, so report them as unavailable (a non-default analyzer or a
+            # snippet request degrades with a clear capability error).
+            return _AURADB_CAPABILITIES
+        # Reflect the server's advertised v1.5 capabilities. Older features keep
+        # their established static values; only the additive analyzer/snippet flags
+        # are negotiated, so this never weakens existing behavior.
+        return replace(
+            _AURADB_CAPABILITIES,
+            query_analyzers="query_analyzers" in srv,
+            search_snippets="search_snippets" in srv,
+        )
 
     # -- lifecycle ---------------------------------------------------------------
     async def connect(self) -> None:
@@ -180,6 +200,17 @@ class ProtocolBackend(Backend):
             self._raise(response)
         if response.opcode is not Opcode.HANDSHAKE_ACK:
             raise AuraProtocolError("Server did not acknowledge handshake")
+        # Learn the server's advertised capabilities so the additive v1.5 features
+        # (query-time analyzers, search snippets) are gated on what the server
+        # actually implements. A server that predates them does not advertise them,
+        # so a non-default analyzer or a snippet request fails clearly instead of
+        # being silently dropped.
+        ack = decode_body(response.payload)
+        caps = ack.get("capabilities") if isinstance(ack, dict) else None
+        if isinstance(caps, dict):
+            caps_list = caps.get("capabilities")
+            if isinstance(caps_list, list):
+                self._server_caps = {str(c) for c in caps_list}
 
     async def ping(self) -> bool:
         nonce = self._next_request_id()
@@ -231,6 +262,14 @@ class ProtocolBackend(Backend):
 
     # -- execution ---------------------------------------------------------------
     async def execute_query(self, ir: dict[str, Any], *, txid: int = 0) -> BackendResult:
+        # A non-default query-time analyzer (on text_search or hybrid, keyword
+        # included) needs the server's live `query_analyzers` capability, so this
+        # degrades with a capability error rather than silently ignoring it.
+        if requested_analyzer(ir) is not None:
+            self._require("query_analyzers")
+        snippet = ir.get("snippet")
+        if isinstance(snippet, dict) and snippet.get("fields"):
+            self._require("search_snippets")
         return await self._execute(ir, Opcode.QUERY, txid)
 
     async def execute_mutation(self, ir: dict[str, Any], *, txid: int = 0) -> BackendResult:

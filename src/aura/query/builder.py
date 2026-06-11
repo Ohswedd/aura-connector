@@ -9,11 +9,12 @@ clean.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterable
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Iterable, Sequence
+from dataclasses import dataclass, replace
 from dataclasses import field as dc_field
 from typing import TYPE_CHECKING, Any, Generic, Literal, Protocol, TypeVar, runtime_checkable
 
+from ..analyzers import AnalyzerOptions
 from ..errors import AuraNotFoundError, AuraQueryError
 from .ast import (
     CountQuery,
@@ -25,6 +26,7 @@ from .ast import (
     InsertQuery,
     QueryNode,
     SelectQuery,
+    SnippetRequest,
     TextRankedSearch,
     TextSearch,
     TraverseQuery,
@@ -554,8 +556,18 @@ class QueryBuilder:
         k1: float | None = None,
         b: float | None = None,
         limit: int | None = None,
+        analyzer: str | None = None,
     ) -> QueryBuilder:
-        """Ranked full-text (BM25) search on a single full-text field."""
+        """Ranked full-text (BM25) search on a single full-text field.
+
+        ``analyzer`` selects a query-time analyzer preset (AuraDB v1.5.0:
+        ``default`` / ``simple`` / ``ascii_fold`` / ``keyword`` / ``english_basic``);
+        an unknown name raises :class:`~aura.errors.AuraQueryError`. ``None`` or
+        ``"default"`` preserves v1.x behavior. The same presets are available on
+        :meth:`search_hybrid` (``keyword`` included). A non-default analyzer requires
+        the backend's ``query_analyzers`` capability at execution time and otherwise
+        raises :class:`~aura.errors.AuraCapabilityError` — it is never silently dropped.
+        """
         name = field.name if isinstance(field, FieldReference) else str(field)
         if not query or not query.strip():
             raise AuraQueryError("search_text query must be a non-empty string")
@@ -563,11 +575,75 @@ class QueryBuilder:
             raise AuraQueryError("rank must be 'bm25' or 'term_frequency'")
         if operator not in {"or", "and"}:
             raise AuraQueryError("operator must be 'or' or 'and'")
-        ts = TextRankedSearch(field=name, query=query, operator=operator, rank=rank, k1=k1, b=b)
+        # Validate the analyzer name client-side (no silent fallback).
+        analyzer_name = AnalyzerOptions(analyzer).name if analyzer is not None else None
+        ts = TextRankedSearch(
+            field=name,
+            query=query,
+            operator=operator,
+            rank=rank,
+            k1=k1,
+            b=b,
+            analyzer=analyzer_name,
+        )
         new = self._replace(text_search=ts)
         if limit is not None:
             new = self._replace_on(new, limit=limit)
         return self._clone(new)
+
+    def analyzer(self, name: str) -> QueryBuilder:
+        """Set the query-time analyzer for an existing ``search_text`` or
+        ``search_hybrid`` clause.
+
+        Chains after :meth:`search_text` (``q.search_text(...).analyzer("simple")``) or
+        :meth:`search_hybrid` (``q.search_hybrid(...).analyzer("keyword")``). ``name`` is
+        validated client-side against the AuraDB presets; a non-default analyzer requires
+        the backend's ``query_analyzers`` capability at execution and otherwise raises
+        :class:`~aura.errors.AuraCapabilityError`. Raises
+        :class:`~aura.errors.AuraQueryError` if no ``search_text``/``search_hybrid``
+        clause is set yet.
+        """
+        validated = AnalyzerOptions(name).name
+        if self._query.text_search is not None:
+            ts = replace(self._query.text_search, analyzer=validated)
+            return self._clone(self._replace(text_search=ts))
+        if self._query.hybrid is not None:
+            hs = replace(self._query.hybrid, analyzer=validated)
+            return self._clone(self._replace(hybrid=hs))
+        raise AuraQueryError("analyzer() requires a prior search_text() or search_hybrid() clause")
+
+    def snippets(
+        self,
+        *,
+        fields: Sequence[FieldReference | str],
+        max_fragments: int | None = None,
+        fragment_chars: int | None = None,
+    ) -> QueryBuilder:
+        """Request plain-text snippets/highlights for the listed stored fields.
+
+        Snippets are produced only for ``fields`` (the allowlist); the server caps
+        the fragment count and length and never returns a field outside the list.
+        Chains after a ranked ``search_text`` (or ``search_hybrid``) clause, which
+        supplies the query text and analyzer to highlight against. A snippet request
+        requires the backend's ``search_snippets`` capability at execution time and
+        otherwise raises :class:`~aura.errors.AuraCapabilityError` — it is never
+        silently dropped. Snippet text is plain text (no HTML markup).
+        """
+        names = tuple(f.name if isinstance(f, FieldReference) else str(f) for f in fields)
+        if not names:
+            raise AuraQueryError("snippets() requires at least one field")
+        if self._query.text_search is None and self._query.hybrid is None:
+            raise AuraQueryError(
+                "snippets() requires a prior search_text() or search_hybrid() clause"
+            )
+        if max_fragments is not None and max_fragments < 1:
+            raise AuraQueryError("snippets max_fragments must be >= 1")
+        if fragment_chars is not None and fragment_chars < 1:
+            raise AuraQueryError("snippets fragment_chars must be >= 1")
+        req = SnippetRequest(
+            fields=names, max_fragments=max_fragments, fragment_chars=fragment_chars
+        )
+        return self._clone(self._replace(snippet=req))
 
     def search_vector(
         self,
@@ -636,8 +712,18 @@ class QueryBuilder:
         operator: str = "or",
         k1: float | None = None,
         b: float | None = None,
+        analyzer: str | None = None,
     ) -> QueryBuilder:
-        """Hybrid text-plus-vector search fusing BM25 and exact vector signals."""
+        """Hybrid text-plus-vector search fusing BM25 and exact vector signals.
+
+        ``analyzer`` selects a query-time analyzer preset for the text signal
+        (AuraDB v1.5.0: ``default`` / ``simple`` / ``ascii_fold`` / ``keyword`` /
+        ``english_basic``); ``keyword`` gives the text component whole-field exact-match
+        semantics while the vector component still contributes. An unknown name raises
+        immediately; ``None`` or ``"default"`` preserves v1.x behavior. A non-default
+        analyzer requires the backend's ``query_analyzers`` capability at execution time
+        and otherwise raises a capability error (no silent fallback).
+        """
         tname = text_field.name if isinstance(text_field, FieldReference) else str(text_field)
         vname = vector_field.name if isinstance(vector_field, FieldReference) else str(vector_field)
         if not query or not query.strip():
@@ -651,6 +737,8 @@ class QueryBuilder:
             raise AuraQueryError("hybrid weights must be non-negative and not both zero")
         if top_k <= 0:
             raise AuraQueryError("top_k must be positive")
+        # Validate the analyzer name client-side (no silent fallback).
+        analyzer_name = AnalyzerOptions(analyzer).name if analyzer is not None else None
         hs = HybridSearch(
             text_field=tname,
             text_query=query,
@@ -664,6 +752,7 @@ class QueryBuilder:
             operator=operator,
             k1=k1,
             b=b,
+            analyzer=analyzer_name,
         )
         # top_k bounds the result page.
         return self._clone(self._replace_on(self._replace(hybrid=hs), limit=top_k))

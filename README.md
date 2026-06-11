@@ -266,6 +266,19 @@ CLIs emit JSON relevance/recall reports; `aura.search_quality` parses them into 
 output — it does not run the CLI or compute relevance, and the metrics are dataset-specific
 regression signals, not universal benchmarks. See `examples/auradb_search_eval_report.py`.
 
+**Search analyzers & snippets (AuraDB v1.5.0).** Name a **live** query-time analyzer
+preset (`default`/`simple`/`ascii_fold`/`keyword`/`english_basic`) on a ranked search with
+`search_text(..., analyzer="simple")` or `.analyzer("simple")` (validated against
+`AnalyzerOptions`) — it is sent over the wire to a v1.5 server. A non-default analyzer is gated
+on the server's `query_analyzers` capability and otherwise raises `AuraCapabilityError` rather
+than being silently dropped; non-AuraDB backends are never claimed to support it. Request
+**opt-in** plain-text snippets with `.snippets(fields=[...])` and read the typed models via
+`aura.search_snippets(row)` (gated on `search_snippets`). `english_basic` is a small built-in
+helper, not full NLP. `SearchEvalReport` carries the effective `analyzer`, and
+`AnalyzerComparisonReport` parses `search eval compare-analyzers`. See
+`examples/auradb_analyzer_search.py`, `examples/auradb_snippet_search.py`, and
+`examples/auradb_search_eval_analyzers.py`.
+
 ## Backends
 
 The DSN scheme selects the backend — nothing else in your code changes:

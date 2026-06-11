@@ -294,6 +294,17 @@ approximate/HNSW vector preview — in-memory/rebuilt, not large-scale ANN). Aur
 cursor resume (`Page`/`SearchPage`, `client.resume_search`, `builder.page`). See
 [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).
 
+AuraDB v1.5.0 adds **live** query-time analyzer presets
+(`default`/`simple`/`ascii_fold`/`keyword`/`english_basic`), named on a ranked `search_text`
+**or** `search_hybrid` via `analyzer=...` or `.analyzer(...)` (validated client-side) and sent
+over the wire; `keyword` is supported on hybrid search (whole-field text matches fused with the
+vector signal). A non-default analyzer is gated on the server's `query_analyzers` capability and
+otherwise raises `AuraCapabilityError` rather than being silently ignored. AuraDB v1.5.0 also
+produces **opt-in** plain-text snippets/highlights: request them with
+`.snippets(fields=[...])` and read the typed models via `aura.search_snippets(row)`; snippets
+are gated on the `search_snippets` capability. `english_basic` is a small built-in helper, not
+full NLP. See [SEARCH_AND_RANKING.md](SEARCH_AND_RANKING.md).
+
 ## Aggregations, group-by, and query profile (v1.2.0 / v1.3.0)
 
 `client.query(Model).facet(...).aggregate_count().min(...).max(...).aggregate()` returns a

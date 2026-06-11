@@ -83,6 +83,9 @@ class TextRankedSearch:
     rank: str = "bm25"
     k1: float | None = None
     b: float | None = None
+    #: Query-time analyzer preset (AuraDB v1.5.0). ``None`` or ``"default"`` is the
+    #: v1.x behavior and is omitted from the IR so existing queries are unchanged.
+    analyzer: str | None = None
 
     def to_ir(self) -> dict[str, Any]:
         ir: dict[str, Any] = {
@@ -95,6 +98,30 @@ class TextRankedSearch:
             ir["k1"] = self.k1
         if self.b is not None:
             ir["b"] = self.b
+        if self.analyzer is not None and self.analyzer != "default":
+            ir["analyzer"] = self.analyzer
+        return ir
+
+
+@dataclass(frozen=True)
+class SnippetRequest:
+    """Opt-in search snippet/highlight parameters for `search_text()` results.
+
+    Snippets are produced only for the explicitly listed ``fields`` (the allowlist);
+    the server caps fragment count and length and never returns a field outside the
+    list. Requires the backend's ``search_snippets`` capability at execution time.
+    """
+
+    fields: tuple[str, ...]
+    max_fragments: int | None = None
+    fragment_chars: int | None = None
+
+    def to_ir(self) -> dict[str, Any]:
+        ir: dict[str, Any] = {"fields": list(self.fields)}
+        if self.max_fragments is not None:
+            ir["max_fragments"] = self.max_fragments
+        if self.fragment_chars is not None:
+            ir["fragment_chars"] = self.fragment_chars
         return ir
 
 
@@ -134,6 +161,11 @@ class HybridSearch:
     operator: str = "or"
     k1: float | None = None
     b: float | None = None
+    #: Query-time analyzer preset for the text signal (AuraDB v1.5.0). ``None`` or
+    #: ``"default"`` is the v1.x behavior and is omitted from the IR; any other preset
+    #: (including ``keyword``) is forwarded and requires the ``query_analyzers``
+    #: capability at execution time.
+    analyzer: str | None = None
 
     def to_ir(self) -> dict[str, Any]:
         ir: dict[str, Any] = {
@@ -151,6 +183,8 @@ class HybridSearch:
             ir["k1"] = self.k1
         if self.b is not None:
             ir["b"] = self.b
+        if self.analyzer is not None and self.analyzer != "default":
+            ir["analyzer"] = self.analyzer
         return ir
 
 
@@ -183,6 +217,8 @@ class SelectQuery(QueryNode):
     text: TextSearch | None = None
     text_search: TextRankedSearch | None = None
     hybrid: HybridSearch | None = None
+    # Opt-in search snippets/highlights (AuraDB v1.5.0), set via ``.snippets(...)``.
+    snippet: SnippetRequest | None = None
     fusion_alpha: float | None = None
     consistency: str = "strong"
     timeout_ms: int | None = None
@@ -222,6 +258,8 @@ class SelectQuery(QueryNode):
             ir["text_search"] = self.text_search.to_ir()
         if self.hybrid is not None:
             ir["hybrid"] = self.hybrid.to_ir()
+        if self.snippet is not None:
+            ir["snippet"] = self.snippet.to_ir()
         if self.fusion_alpha is not None:
             ir["fusion"] = {"alpha": self.fusion_alpha}
         ir["consistency"] = self.consistency

@@ -17,6 +17,7 @@ import ssl
 from collections.abc import AsyncIterator, Iterable
 from typing import TYPE_CHECKING, Any
 
+from ..analyzers import requested_analyzer
 from ..config import ClientConfig, TokenAuth
 from ..errors import (
     AuraAuthenticationError,
@@ -284,6 +285,11 @@ def _translate_select(ir: dict[str, Any]) -> dict[str, Any]:
             ts["k1"] = text_search["k1"]
         if text_search.get("b") is not None:
             ts["b"] = text_search["b"]
+        # Live query-time analyzer selection (AuraDB v1.5.0). Forwarded only when
+        # the builder set a non-default analyzer; a `default`/absent analyzer is
+        # omitted so the wire shape is byte-identical to a pre-v1.5 request.
+        if text_search.get("analyzer") is not None:
+            ts["analyzer"] = text_search["analyzer"]
         server["text_search"] = ts
 
     hybrid = ir.get("hybrid")
@@ -307,6 +313,8 @@ def _translate_select(ir: dict[str, Any]) -> dict[str, Any]:
             hy["k1"] = hybrid["k1"]
         if hybrid.get("b") is not None:
             hy["b"] = hybrid["b"]
+        if hybrid.get("analyzer") is not None:
+            hy["analyzer"] = hybrid["analyzer"]
         server["hybrid"] = hy
 
     sort = ir.get("sort")
@@ -328,6 +336,16 @@ def _translate_select(ir: dict[str, Any]) -> dict[str, Any]:
     # over the wire rather than being silently dropped.
     if ir.get("timeout_ms") is not None:
         server["timeout_ms"] = int(ir["timeout_ms"])
+    # Opt-in search snippets/highlights (AuraDB v1.5.0). Only the explicitly
+    # requested fields are eligible; the server caps fragment count and length.
+    snippet = ir.get("snippet")
+    if isinstance(snippet, dict) and snippet.get("fields"):
+        sn: dict[str, Any] = {"fields": [str(f) for f in snippet["fields"]]}
+        if snippet.get("max_fragments") is not None:
+            sn["max_fragments"] = int(snippet["max_fragments"])
+        if snippet.get("fragment_chars") is not None:
+            sn["fragment_chars"] = int(snippet["fragment_chars"])
+        server["snippet"] = sn
     return server
 
 
@@ -364,6 +382,12 @@ def _decode_row(row: dict[str, Any]) -> dict[str, Any]:
         out["__vector_score__"] = row["vector_score"]
     if row.get("rank") is not None:
         out["__rank__"] = row["rank"]
+    # Opt-in snippets/highlights (AuraDB v1.5.0). The server omits the field
+    # entirely unless the query requested snippets, so older servers and
+    # non-snippet queries leave ``__snippets__`` unset.
+    snippets = row.get("snippets")
+    if snippets:
+        out["__snippets__"] = snippets
     return out
 
 
@@ -531,6 +555,15 @@ class AuraDBNativeBackend(Backend):
         return out
 
     async def execute_query(self, ir: dict[str, Any], *, txid: int = 0) -> BackendResult:
+        # A non-default analyzer needs the server's `query_analyzers` capability;
+        # an opt-in snippet request needs `search_snippets`. Both degrade with a
+        # clear capability error on a server that does not advertise them rather
+        # than silently dropping the request.
+        if requested_analyzer(ir) is not None:
+            self._require("query_analyzers")
+        snippet = ir.get("snippet")
+        if isinstance(snippet, dict) and snippet.get("fields"):
+            self._require("search_snippets")
         op = ir["operation"]
         # AuraDB v0.2.0 honors the frame transaction id on reads, returning the
         # transaction view (committed state plus the transaction's own staged
@@ -745,9 +778,16 @@ class AuraDBNativeBackend(Backend):
             query_profile = "query_profile" in srv
             hnsw_preview = "approximate_vector_search" in srv
             cursor_resume = "ranked_search_cursor" in srv
+            # AuraDB v1.5.0 additive features: live query-time analyzer selection and
+            # search snippets/highlights. Gated on the server's advertised capability
+            # so a non-default analyzer or a snippet request degrades with a clear
+            # capability error on an older server instead of being silently dropped.
+            query_analyzers = "query_analyzers" in srv
+            search_snippets = "search_snippets" in srv
         else:
             full_text = hybrid = vector = True
             group_by = query_profile = hnsw_preview = cursor_resume = True
+            query_analyzers = search_snippets = True
         return BackendCapabilities(
             name="auradb",
             transactions=True,
@@ -769,6 +809,8 @@ class AuraDBNativeBackend(Backend):
             query_profile=query_profile,
             hnsw_preview=hnsw_preview,
             cursor_resume=cursor_resume,
+            query_analyzers=query_analyzers,
+            search_snippets=search_snippets,
         )
 
     def server_version(self) -> str | None:

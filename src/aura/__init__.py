@@ -7,6 +7,7 @@ available but the names exported here are the stable, user-facing entry points.
 from __future__ import annotations
 
 from ._native import native_status
+from .analyzers import ANALYZER_PRESETS, AnalyzerOptions
 from .backends import (
     Backend,
     BackendCapabilities,
@@ -83,10 +84,18 @@ from .schema import (
 )
 from .scores import SearchScores, search_scores
 from .search_quality import (
+    AnalyzerComparisonReport,
+    AnalyzerLeg,
     ExactAnnComparisonReport,
     SearchEvalMetrics,
     SearchEvalQueryResult,
     SearchEvalReport,
+)
+from .snippets import (
+    HighlightRange,
+    SearchSnippet,
+    SearchSnippetFragment,
+    search_snippets,
 )
 from .vectors import Vector
 
@@ -125,6 +134,11 @@ __all__ = [
     # search scores
     "SearchScores",
     "search_scores",
+    # search snippets / highlights
+    "SearchSnippet",
+    "SearchSnippetFragment",
+    "HighlightRange",
+    "search_snippets",
     # schema
     "ModelSchema",
     "schema_document",
@@ -161,6 +175,11 @@ __all__ = [
     "SearchEvalMetrics",
     "SearchEvalQueryResult",
     "ExactAnnComparisonReport",
+    "AnalyzerComparisonReport",
+    "AnalyzerLeg",
+    # analyzers (AuraDB v1.5.0)
+    "AnalyzerOptions",
+    "ANALYZER_PRESETS",
     # errors
     "AuraError",
     "AuraBackendError",
