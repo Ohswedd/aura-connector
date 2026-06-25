@@ -78,7 +78,7 @@ jobs:
       AURA_TEST_REDIS_DSN: redis://localhost:6379/0
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
